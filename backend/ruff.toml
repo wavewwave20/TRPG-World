@@ -1,0 +1,55 @@
+# Ruff 설정 파일
+
+# 줄 길이 설정 (120자)
+line-length = 120
+
+# Python 버전
+target-version = "py311"
+
+# 제외할 폴더
+exclude = [
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "__pypackages__",
+    "build",
+    "dist",
+    "alembic",  # Alembic은 특수한 import 패턴 사용
+]
+
+[lint]
+# 사용할 규칙
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+]
+
+# 무시할 규칙
+ignore = [
+    "E501",  # line-too-long (line-length로 처리)
+    "E712",  # comparison-with-bool (명시적 비교 허용)
+]
+
+# 자동 수정 허용
+fixable = ["ALL"]
+
+# 파일별 규칙 무시
+[lint.per-file-ignores]
+"__init__.py" = ["F401"]  # unused-import (재export용)
+"tests/**/*.py" = ["F401", "F811"]  # pytest fixtures
+"scripts/**/*.py" = ["F401"]  # 스크립트는 유연하게
+
+# isort 설정
+[lint.isort]
+known-first-party = ["app"]
+
+# 포맷팅 설정
+[format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"

@@ -1,0 +1,284 @@
+/* Judgment Modal Styles */
+
+/* Modal Overlay - semi-transparent background with blur */
+.judgment-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  z-index: 1000;
+  animation: fadeIn 0.2s ease-out;
+}
+
+/* Modal Container - centers the modal content */
+.judgment-modal-container {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1001;
+  padding: 1rem;
+}
+
+/* Modal Content - the actual modal box */
+.judgment-modal-content {
+  background: white;
+  border-radius: 1rem;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1),
+              0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  max-width: 600px;
+  width: 95%;
+  max-height: 90vh;
+  overflow-y: auto;
+  animation: scaleIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform, opacity;
+  /* Smooth scrolling for better UX */
+  scroll-behavior: smooth;
+  /* Custom scrollbar styling for webkit browsers */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.5) transparent;
+}
+
+/* Webkit scrollbar styling */
+.judgment-modal-content::-webkit-scrollbar {
+  width: 8px;
+}
+
+.judgment-modal-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.judgment-modal-content::-webkit-scrollbar-thumb {
+  background-color: rgba(148, 163, 184, 0.5);
+  border-radius: 4px;
+}
+
+.judgment-modal-content::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(148, 163, 184, 0.7);
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes scaleOut {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes slideOutLeft {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+}
+
+@keyframes slideInLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes slideOutRight {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+}
+
+/* Mobile Optimization - Requirement 5.2, 5.3, 5.5 */
+@media (max-width: 767px) {
+  .judgment-modal-content {
+    width: 95%;
+    max-height: 85vh;
+    /* Ensure proper padding on mobile */
+    padding: 0;
+  }
+  
+  /* Adjust modal container padding for mobile */
+  .judgment-modal-container {
+    padding: 0.5rem;
+  }
+  
+  /* Ensure text remains readable on mobile */
+  .judgment-modal-content * {
+    /* Prevent text from being too small */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+}
+
+/* Tablet Optimization */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .judgment-modal-content {
+    width: 90%;
+    max-width: 600px;
+  }
+}
+
+/* Desktop Optimization - Requirement 5.1 */
+@media (min-width: 1024px) {
+  .judgment-modal-content {
+    width: 600px;
+    max-width: 600px;
+  }
+  
+  /* Center alignment is already handled by flex container */
+}
+
+/* Closing animations */
+.judgment-modal-overlay.closing {
+  animation: fadeOut 0.2s ease-in;
+}
+
+.judgment-modal-content.closing {
+  animation: scaleOut 0.2s cubic-bezier(0.4, 0, 1, 1);
+}
+
+/* Judgment transition animations */
+.judgment-card-enter {
+  animation: slideInRight 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.judgment-card-exit {
+  animation: slideOutLeft 0.3s cubic-bezier(0.4, 0, 1, 1);
+}
+
+/* GPU acceleration for smooth animations */
+.judgment-modal-overlay,
+.judgment-modal-content,
+.judgment-card-enter,
+.judgment-card-exit {
+  will-change: transform, opacity;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+/* Respect reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  .judgment-modal-overlay,
+  .judgment-modal-content,
+  .judgment-card-enter,
+  .judgment-card-exit {
+    animation: none !important;
+    transition: none !important;
+  }
+  
+  .judgment-modal-overlay,
+  .judgment-modal-content,
+  .judgment-card-enter,
+  .judgment-card-exit {
+    will-change: auto;
+    transform: none;
+  }
+}
+
+/* Additional responsive utilities */
+
+/* Ensure modal doesn't overflow on very small screens */
+@media (max-width: 374px) {
+  .judgment-modal-content {
+    width: 98%;
+    max-height: 90vh;
+    border-radius: 0.75rem;
+  }
+  
+  .judgment-modal-container {
+    padding: 0.25rem;
+  }
+}
+
+/* Landscape mobile optimization */
+@media (max-width: 767px) and (orientation: landscape) {
+  .judgment-modal-content {
+    max-height: 95vh;
+  }
+}
+
+/* Large desktop optimization */
+@media (min-width: 1440px) {
+  .judgment-modal-content {
+    /* Keep max-width at 600px even on large screens for optimal readability */
+    max-width: 600px;
+  }
+}
+
+/* High DPI displays - ensure crisp rendering */
+@media (-webkit-min-device-pixel-ratio: 2), (min-resolution: 192dpi) {
+  .judgment-modal-content {
+    /* Improve rendering on retina displays */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+/* Touch device optimizations */
+@media (hover: none) and (pointer: coarse) {
+  /* Increase touch targets on touch devices */
+  .judgment-modal-content button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  
+  /* Disable hover effects on touch devices */
+  .judgment-modal-content *:hover {
+    /* Touch devices don't need hover states */
+  }
+}
