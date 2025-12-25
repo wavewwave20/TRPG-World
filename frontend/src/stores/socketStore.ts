@@ -434,9 +434,78 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
       });
     });
     
-    // Story generation started - Phase 3 begins
+    // **NEW: Judgments ready - pre-rolling complete, background generation started**
+    socket.on('judgments_ready', (data: { 
+      session_id: number,
+      analyses: Array<{
+        character_id: number,
+        action_text: string,
+        modifier: number,
+        difficulty: number,
+        difficulty_reasoning: string
+      }>
+    }) => {
+      console.log('Judgments ready (pre-rolled):', data);
+      
+      useGameStore.getState().addNotification({
+        type: 'system',
+        message: '판정 준비 완료! 주사위를 확인하세요.'
+      });
+    });
+    
+    // **NEW: Narrative stream started**
+    socket.on('narrative_stream_started', (data: { session_id: number }) => {
+      console.log('Narrative stream started:', data);
+      
+      useAIStore.getState().setGenerating(true);
+      useAIStore.getState().clearCurrentNarrative();
+      
+      // Close judgment modal when narrative starts
+      useGameStore.getState().setJudgmentModalOpen(false);
+      
+      useGameStore.getState().addNotification({
+        type: 'system',
+        message: '이야기가 시작됩니다...'
+      });
+    });
+    
+    // **NEW: Narrative complete (streaming finished)**
+    socket.on('narrative_complete', (data: { session_id: number }) => {
+      console.log('Narrative complete:', data);
+      
+      useAIStore.getState().setGenerating(false);
+      
+      // Clear judgments after story is complete (ready for next round)
+      useAIStore.getState().clearJudgments();
+      
+      // Clear the streaming narrative (will be replaced by story log)
+      useAIStore.getState().clearCurrentNarrative();
+      
+      // Re-enable action input for next round
+      useActionStore.getState().setActionInputDisabled(false);
+      
+      // Trigger story log refresh by emitting a custom event
+      // The CenterPane will pick this up and reload story logs
+      window.dispatchEvent(new CustomEvent('story_logs_updated', { detail: { session_id: data.session_id } }));
+      
+      useGameStore.getState().addNotification({
+        type: 'system',
+        message: '이야기 생성이 완료되었습니다.'
+      });
+    });
+    
+    // **NEW: Narrative error**
+    socket.on('narrative_error', (data: { session_id: number, error: string }) => {
+      console.error('Narrative error:', data);
+      
+      useAIStore.getState().setGenerating(false);
+      
+      useGameStore.getState().addError(`이야기 생성 실패: ${data.error}`);
+    });
+    
+    // Story generation started - Phase 3 begins (LEGACY - kept for backward compatibility)
     socket.on('story_generation_started', (data: { session_id: number }) => {
-      console.log('Story generation started:', data);
+      console.log('Story generation started (legacy):', data);
       
       useAIStore.getState().setGenerating(true);
       useAIStore.getState().clearCurrentNarrative();
@@ -448,11 +517,12 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
     });
     
     // Narrative token - append to current narrative
-    socket.on('narrative_token', (data: { token: string }) => {
+    socket.on('narrative_token', (data: { token: string, session_id?: number }) => {
+      console.log('Narrative token received:', data.token);
       useAIStore.getState().appendNarrativeToken(data.token);
     });
     
-    // Story generation complete - Phase 3 finished
+    // Story generation complete - Phase 3 finished (LEGACY - kept for backward compatibility)
     socket.on('story_generation_complete', (data: { 
       session_id: number;
       narrative: string;
@@ -467,7 +537,7 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
         outcome: string;
       }>;
     }) => {
-      console.log('Story generation complete:', data);
+      console.log('Story generation complete (legacy):', data);
       
       useAIStore.getState().setGenerating(false);
       

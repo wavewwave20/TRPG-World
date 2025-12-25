@@ -224,11 +224,11 @@ async def check_and_deactivate_session(session_id: int, db: Session) -> bool:
             if info.get("session_id") == session_id:
                 session_presence.pop(sid, None)
 
-        logger.info(f"Session {session_id} deactivated due to no participants")
+        logger.info(f"세션 {session_id} 비활성화: 참가자 없음")
         return True
 
     except Exception as e:
-        logger.error(f"Error in check_and_deactivate_session: {e}")
+        logger.error(f"check_and_deactivate_session 에러: {e}")
         db.rollback()
         return False
 
@@ -307,7 +307,7 @@ async def _presence_monitor():
                     await check_and_deactivate_session(session_id, db)
 
                 except Exception as e:
-                    logger.error(f"Error during presence timeout handling for {sid}: {e}")
+                    logger.error(f"presence 타임아웃 처리 에러: {sid}, {e}")
                     db.rollback()
                 finally:
                     db.close()
@@ -337,7 +337,7 @@ async def verify_host_authorization(session_id: int, user_id: int, db: Session) 
 
         return True, None
     except Exception as e:
-        logger.error(f"Error in verify_host_authorization: {e}")
+        logger.error(f"verify_host_authorization 에러: {e}")
         return False, "Internal server error"
 
 
@@ -445,7 +445,7 @@ async def connect(sid, environ):
         environ: ASGI environment dictionary
     """
     global _presence_task_started
-    logger.info(f"Client connected: {sid}")
+    logger.info(f"클라이언트 연결: {sid}")
     # Start presence monitor once, lazily on first connection
     if not _presence_task_started:
         try:
@@ -469,7 +469,7 @@ async def disconnect(sid):
     Args:
         sid: Socket session ID
     """
-    logger.info(f"Client disconnected: {sid}")
+    logger.info(f"클라이언트 연결 해제: {sid}")
 
     # Requirement 10.1: Clear presence tracking for this sid
     info = session_presence.pop(sid, None)
@@ -510,7 +510,7 @@ async def disconnect(sid):
                     room=room_name,
                 )
 
-                logger.info(f"Client {sid} disconnected from session {session_id}, participant removed")
+                logger.info(f"클라이언트 {sid} 세션 {session_id}에서 연결 해제, 참가자 제거됨")
 
             # If the disconnected user is the host, end the session
             await _maybe_end_session_if_host(session_id, user_id)
@@ -598,7 +598,7 @@ async def join_session(sid, data):
                 room=room_name,
             )
 
-            logger.info(f"Client {sid} joined session {session_id} with character {character_name}")
+            logger.info(f"클라이언트 {sid} 세션 {session_id} 참가: 캐릭터={character_name}")
 
         finally:
             db.close()
@@ -671,7 +671,7 @@ async def leave_session(sid, data):
                 room=room_name,
             )
 
-            logger.info(f"Client {sid} left session {session_id}")
+            logger.info(f"클라이언트 {sid} 세션 {session_id} 퇴장")
 
             # Requirement 7.5: Check if session should be deactivated
             await check_and_deactivate_session(session_id, db)
@@ -735,7 +735,7 @@ async def submit_action(sid, data):
             room=room_name,
         )
 
-        logger.info(f"Action submitted: session={session_id}, player={player_id}, character={character_name}")
+        logger.info(f"행동 제출: 세션={session_id}, 플레이어={player_id}, 캐릭터={character_name}")
 
     except Exception as e:
         print(f"Error in submit_action: {e}")
@@ -805,7 +805,7 @@ async def submit_player_action(sid, data):
         action_text = data.get("action_text", "").strip()
         action_type = data.get("action_type", "dexterity").lower()
 
-        logger.info(f"Phase 1 - Action submitted: session={session_id}, character={character_id}")
+        logger.info(f"Phase 1 - 행동 제출: 세션={session_id}, 캐릭터={character_id}")
 
         # Validate required fields
         if not session_id or not character_id:
@@ -895,9 +895,7 @@ async def submit_player_action(sid, data):
             db.commit()
             db.refresh(action_judgment)
 
-            logger.info(
-                f"Phase 1 complete: character={character_id}, modifier={analysis.modifier:+d}, DC={analysis.difficulty}"
-            )
+            logger.info(f"Phase 1 완료: 캐릭터={character_id}, 보정치={analysis.modifier:+d}, DC={analysis.difficulty}")
 
             # Emit judgment_ready event to the player
             await sio.emit(
@@ -933,7 +931,7 @@ async def submit_player_action(sid, data):
             )
 
         except Exception as e:
-            logger.error(f"Phase 1 error: {e}", exc_info=True)
+            logger.error(f"Phase 1 에러: {e}", exc_info=True)
             await sio.emit(
                 "action_analysis_error",
                 {"session_id": session_id, "character_id": character_id, "error": str(e)},
@@ -943,7 +941,7 @@ async def submit_player_action(sid, data):
             db.close()
 
     except Exception as e:
-        logger.error(f"Error in submit_player_action: {e}", exc_info=True)
+        logger.error(f"submit_player_action 에러: {e}", exc_info=True)
         await sio.emit(
             "action_analysis_error", {"session_id": data.get("session_id"), "error": "Failed to analyze action"}, to=sid
         )
@@ -953,13 +951,15 @@ async def submit_player_action(sid, data):
 async def roll_dice(sid, data):
     """
     Phase 2: Handle player dice roll for 3-phase AI process.
-
-    This handler processes the player's dice roll:
-    1. Receives dice result from player
-    2. Updates ActionJudgment with dice result
-    3. Broadcasts dice_rolled event to all participants
-    4. Checks if all players have rolled
-    5. Triggers Phase 3 (story generation) if all rolled
+    
+    **Enhanced with Pre-rolled Dice**
+    
+    This handler now returns pre-rolled dice values instead of generating new ones:
+    1. Receives dice confirmation from player (dice_result is ignored)
+    2. Fetches pre-rolled dice from database (phase=0)
+    3. Updates ActionJudgment to phase=2 (confirmed)
+    4. Broadcasts dice_rolled event to all participants
+    5. Checks if all players have confirmed
 
     Args:
         sid: Socket session ID
@@ -967,89 +967,60 @@ async def roll_dice(sid, data):
             - session_id: int
             - character_id: int
             - judgment_id: int (from judgment_ready event)
-            - dice_result: int (1-20)
+            - dice_result: int (IGNORED - for backward compatibility only)
 
     Events emitted:
         - dice_rolled: Broadcast to all participants
-        - all_dice_rolled: When all players have rolled (triggers Phase 3)
-        - dice_roll_error: When dice roll fails
+        - all_dice_rolled: When all players have confirmed
+        - dice_roll_error: When dice confirmation fails
 
-    Requirements: 1-B.2, 1-B.5, 9.3
+    Requirements: 3.1, 3.2, 3.3, 3.4
     """
     try:
         session_id = data.get("session_id")
         character_id = data.get("character_id")
-        judgment_id = data.get("judgment_id")
-        dice_result = data.get("dice_result")
 
-        logger.info(f"Phase 2 - Dice roll: session={session_id}, character={character_id}, dice={dice_result}")
+        logger.info(f"Phase 2 - 주사위 확인: 세션={session_id}, 캐릭터={character_id}")
 
         # Validate required fields
-        if not session_id or not character_id or not judgment_id:
+        if not session_id or not character_id:
             await sio.emit(
                 "dice_roll_error",
-                {"session_id": session_id, "error": "session_id, character_id, and judgment_id are required"},
-                to=sid,
-            )
-            return
-
-        # Validate dice result
-        if dice_result is None or not isinstance(dice_result, int) or dice_result < 1 or dice_result > 20:
-            await sio.emit(
-                "dice_roll_error",
-                {"session_id": session_id, "error": "dice_result must be an integer between 1 and 20"},
+                {"session_id": session_id, "error": "session_id and character_id are required"},
                 to=sid,
             )
             return
 
         db = SessionLocal()
         try:
-            # Get the ActionJudgment record
-            judgment = (
-                db.query(ActionJudgment)
-                .filter(
-                    ActionJudgment.id == judgment_id,
-                    ActionJudgment.session_id == session_id,
-                    ActionJudgment.character_id == character_id,
-                )
-                .first()
+            # Use AIGMServiceV2 to confirm dice roll
+            from app.services.ai_gm_service_v2 import AIGMServiceV2
+
+            ai_service = AIGMServiceV2(db=db)
+            dice_result_obj = await ai_service.confirm_dice_roll(
+                session_id=session_id,
+                character_id=character_id
             )
 
+            # Get the confirmed judgment for additional info
+            judgment = db.query(ActionJudgment).filter(
+                ActionJudgment.session_id == session_id,
+                ActionJudgment.character_id == character_id,
+                ActionJudgment.phase == 2
+            ).order_by(ActionJudgment.id.desc()).first()
+            
             if not judgment:
                 await sio.emit("dice_roll_error", {"session_id": session_id, "error": "Judgment not found"}, to=sid)
                 return
-
-            if judgment.phase != 1:
-                await sio.emit(
-                    "dice_roll_error",
-                    {"session_id": session_id, "error": "Dice already rolled for this action"},
-                    to=sid,
-                )
-                return
-
-            # Calculate final value and determine outcome
-            from app.services.dice_system import DiceSystem
-
-            final_value = dice_result + judgment.modifier
-            outcome = DiceSystem.determine_outcome(
-                dice_result=dice_result, modifier=judgment.modifier, difficulty=judgment.difficulty
-            )
-
-            # Update judgment with dice result
-            judgment.dice_result = dice_result
-            judgment.final_value = final_value
-            judgment.outcome = outcome.value
-            judgment.phase = 2  # Phase 2: Dice rolled
-            db.commit()
 
             # Get character name for broadcast
             character = db.query(Character).filter(Character.id == character_id).first()
             character_name = character.name if character else f"Character {character_id}"
 
             logger.info(
-                f"Phase 2 complete: character={character_id}, "
-                f"dice={dice_result}, modifier={judgment.modifier:+d}, "
-                f"final={final_value}, DC={judgment.difficulty}, outcome={outcome.value}"
+                f"Phase 2 완료: 캐릭터={character_id}, "
+                f"주사위={judgment.dice_result}, 보정치={judgment.modifier:+d}, "
+                f"최종={judgment.final_value}, DC={judgment.difficulty}, 결과={judgment.outcome}"
             )
 
             # Broadcast dice_rolled event to all participants
@@ -1060,36 +1031,34 @@ async def roll_dice(sid, data):
                     "session_id": session_id,
                     "character_id": character_id,
                     "character_name": character_name,
-                    "judgment_id": judgment_id,
-                    "dice_result": dice_result,
+                    "judgment_id": judgment.id,
+                    "dice_result": judgment.dice_result,
                     "modifier": judgment.modifier,
-                    "final_value": final_value,
+                    "final_value": judgment.final_value,
                     "difficulty": judgment.difficulty,
-                    "outcome": outcome.value,
+                    "outcome": judgment.outcome,
                 },
                 room=room_name,
             )
 
-            # Check if all players have rolled for this round
-            # Get all Phase 1 judgments that haven't been narrated yet
+            # Check if all players have confirmed (phase=0 means not confirmed yet)
             pending_judgments = (
                 db.query(ActionJudgment)
                 .filter(
                     ActionJudgment.session_id == session_id,
-                    ActionJudgment.phase == 1,  # Still waiting for dice roll
+                    ActionJudgment.phase == 0,  # Still waiting for confirmation
                 )
                 .count()
             )
 
             if pending_judgments == 0:
-                # All players have rolled
-                logger.info(f"All dice rolled for session {session_id}")
+                logger.info(f"모든 주사위 확인 완료: 세션={session_id}")
 
-                # Emit all_dice_rolled event (wait for last player's confirm to start story)
+                # Emit all_dice_rolled event
                 await sio.emit("all_dice_rolled", {"session_id": session_id}, room=room_name)
 
         except Exception as e:
-            logger.error(f"Phase 2 error: {e}", exc_info=True)
+            logger.error(f"Phase 2 에러: {e}", exc_info=True)
             db.rollback()
             await sio.emit(
                 "dice_roll_error", {"session_id": session_id, "character_id": character_id, "error": str(e)}, to=sid
@@ -1098,7 +1067,7 @@ async def roll_dice(sid, data):
             db.close()
 
     except Exception as e:
-        logger.error(f"Error in roll_dice: {e}", exc_info=True)
+        logger.error(f"roll_dice 에러: {e}", exc_info=True)
         await sio.emit(
             "dice_roll_error", {"session_id": data.get("session_id"), "error": "Failed to process dice roll"}, to=sid
         )
@@ -1133,11 +1102,88 @@ async def next_judgment(sid, data):
         room_name = f"session_{session_id}"
         await sio.emit("next_judgment", {"judgment_index": current_index + 1}, room=room_name)
 
-        logger.info(f"Moving to next judgment: session={session_id}, index={current_index + 1}")
+        logger.info(f"다음 판정으로 이동: 세션={session_id}, 인덱스={current_index + 1}")
 
     except Exception as e:
-        logger.error(f"Error in next_judgment: {e}", exc_info=True)
+        logger.error(f"next_judgment 에러: {e}", exc_info=True)
         await sio.emit("error", {"message": "Failed to move to next judgment"}, room=sid)
+
+
+@sio.event
+async def request_narrative_stream(sid, data):
+    """
+    Request narrative stream from buffer.
+    
+    **New Handler for Streaming Optimization**
+    
+    This handler streams the narrative that was generated in the background
+    during Phase 1. The narrative tokens are replayed from the buffer with
+    a typing effect delay.
+
+    Args:
+        sid: Socket session ID
+        data: Dictionary containing:
+            - session_id: int
+
+    Events emitted:
+        - narrative_stream_started: When streaming begins
+        - narrative_token: Each token from the buffer
+        - narrative_complete: When streaming finishes
+        - narrative_error: If buffer not found or error occurred
+
+    Requirements: 2.1, 2.3, 6.3, 6.4
+    """
+    try:
+        session_id = data.get("session_id")
+
+        if not session_id:
+            await sio.emit("error", {"message": "session_id is required"}, room=sid)
+            return
+
+        logger.info(f"이야기 스트림 요청: 세션={session_id}")
+
+        db = SessionLocal()
+        try:
+            room_name = f"session_{session_id}"
+            
+            # Emit stream started event
+            await sio.emit("narrative_stream_started", {"session_id": session_id}, room=room_name)
+            
+            # Use AIGMServiceV2 to stream narrative
+            from app.services.ai_gm_service_v2 import AIGMServiceV2
+            
+            ai_service = AIGMServiceV2(db=db)
+            
+            # Stream tokens
+            token_count = 0
+            async for token in ai_service.stream_narrative(session_id):
+                await sio.emit(
+                    "narrative_token",
+                    {"session_id": session_id, "token": token},
+                    room=room_name
+                )
+                token_count += 1
+            
+            logger.info(f"이야기 토큰 {token_count}개 전송: room={room_name}")
+            
+            # Emit complete event
+            await sio.emit("narrative_complete", {"session_id": session_id}, room=room_name)
+            
+            logger.info(f"이야기 스트림 완료: 세션={session_id}")
+            
+        except ValueError as e:
+            logger.error(f"이야기 스트림 에러: 세션={session_id}, {e}")
+            await sio.emit(
+                "narrative_error",
+                {"session_id": session_id, "error": str(e)},
+                room=f"session_{session_id}"
+            )
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"request_narrative_stream 에러: {e}", exc_info=True)
+        await sio.emit("error", {"message": "Failed to stream narrative"}, room=sid)
 
 
 @sio.event
@@ -1165,7 +1211,7 @@ async def trigger_story_generation(sid, data):
             await sio.emit("error", {"message": "session_id is required"}, room=sid)
             return
 
-        logger.info(f"Manually triggering story generation for session {session_id}")
+        logger.info(f"수동 이야기 생성 트리거: 세션={session_id}")
 
         db = SessionLocal()
         try:
@@ -1175,7 +1221,7 @@ async def trigger_story_generation(sid, data):
             db.close()
 
     except Exception as e:
-        logger.error(f"Error in trigger_story_generation: {e}", exc_info=True)
+        logger.error(f"trigger_story_generation 에러: {e}", exc_info=True)
         await sio.emit("error", {"message": "Failed to trigger story generation"}, room=sid)
 
 
@@ -1203,7 +1249,7 @@ async def trigger_story_generation_internal(session_id: int, db: Session, room_n
 
     Requirements: 1.4, 1-C.2, 9.4, 9.5, 9.6, 9.7
     """
-    logger.info(f"Phase 3 - Starting story generation for session {session_id}")
+    logger.info(f"Phase 3 - 이야기 생성 시작: 세션={session_id}")
 
     # Broadcast story_generation_started event
     await sio.emit("story_generation_started", {"session_id": session_id}, room=room_name)
@@ -1278,10 +1324,10 @@ async def trigger_story_generation_internal(session_id: int, db: Session, room_n
             room=room_name,
         )
 
-        logger.info(f"Phase 3 complete: session={session_id}, narrative_length={len(narrative)}")
+        logger.info(f"Phase 3 완료: 세션={session_id}, 이야기 길이={len(narrative)}")
 
     except Exception as e:
-        logger.error(f"Phase 3 error: {e}", exc_info=True)
+        logger.error(f"Phase 3 에러: {e}", exc_info=True)
 
         # Get host's socket ID to send error
         session = db.query(GameSession).filter(GameSession.id == session_id).first()
@@ -1539,7 +1585,7 @@ async def commit_actions(sid, data):
             # Emit queue_updated event with count 0 to reset queue count display
             await sio.emit("queue_updated", {"actions": [], "queue_count": 0}, room=room_name)
 
-            logger.info(f"Actions committed: session={session_id}, actions_count={len(actions)}")
+            logger.info(f"행동 커밋: 세션={session_id}, 행동 수={len(actions)}")
 
             # ===== AI GENERATION WORKFLOW =====
             # Requirement 9.2: Broadcast generation started event (Phase 1: judgment)
@@ -1577,13 +1623,9 @@ async def commit_actions(sid, data):
                                     action_type=ActionType.DEXTERITY,  # Default for now
                                 )
                             )
-                            logger.info(
-                                f"Mapped action from user {action['player_id']} to character {char.id} ({char.name})"
-                            )
+                            logger.info(f"행동 매핑: 유저 {action['player_id']} -> 캐릭터 {char.id} ({char.name})")
                         else:
-                            logger.warning(
-                                f"Character not found for participant: user_id={action['player_id']}, character_id={participant.character_id}"
-                            )
+                            logger.warning(f"캐릭터 없음: user_id={action['player_id']}, character_id={participant.character_id}")
                     else:
                         # Fallback: try to find by character_name
                         char = db.query(Character).filter(Character.name == action["character_name"]).first()
@@ -1595,13 +1637,9 @@ async def commit_actions(sid, data):
                                     action_type=ActionType.DEXTERITY,
                                 )
                             )
-                            logger.info(
-                                f"Mapped action by character_name fallback: {action['character_name']} -> {char.id}"
-                            )
+                            logger.info(f"캐릭터명으로 매핑: {action['character_name']} -> {char.id}")
                         else:
-                            logger.warning(
-                                f"Could not find character for action: player_id={action['player_id']}, character_name={action['character_name']}"
-                            )
+                            logger.warning(f"캐릭터 찾기 실패: player_id={action['player_id']}, character_name={action['character_name']}")
 
                 if not player_actions:
                     raise ValueError(f"Could not map any actions to characters. Actions: {actions}")
@@ -1617,29 +1655,46 @@ async def commit_actions(sid, data):
 
                 if not analyses:
                     raise ValueError("No analysis results returned from AI")
+                
+                # **NEW: Emit judgments_ready event to all participants**
+                room_name = f"session_{session_id}"
+                await sio.emit(
+                    "judgments_ready",
+                    {
+                        "session_id": session_id,
+                        "analyses": [
+                            {
+                                "character_id": analysis.character_id,
+                                "action_text": analysis.action_text,
+                                "modifier": analysis.modifier,
+                                "difficulty": analysis.difficulty,
+                                "difficulty_reasoning": analysis.difficulty_reasoning,
+                            }
+                            for analysis in analyses
+                        ]
+                    },
+                    room=room_name
+                )
+                logger.info(f"judgments_ready 이벤트 전송: 세션={session_id}")
 
-                # Save Phase 1 results to database and send judgment_ready to each player
-                for i, analysis in enumerate(analyses):
-                    player_action = player_actions[i]
-                    character = db.query(Character).filter(Character.id == player_action.character_id).first()
+                # Get pre-rolled judgments from database (created by _preroll_dice in analyze_actions)
+                # and send judgment_ready to each player
+                for analysis in analyses:
+                    character = db.query(Character).filter(Character.id == analysis.character_id).first()
 
                     if not character:
                         continue
 
-                    # Save ActionJudgment with Phase 1 data (no dice result yet)
-                    action_judgment = ActionJudgment(
-                        session_id=session_id,
-                        character_id=player_action.character_id,
-                        action_text=player_action.action_text,
-                        action_type=player_action.action_type.value,
-                        modifier=analysis.modifier,
-                        difficulty=analysis.difficulty,
-                        difficulty_reasoning=analysis.difficulty_reasoning,
-                        phase=1,  # Phase 1: Analysis complete
-                    )
-                    db.add(action_judgment)
-                    db.commit()
-                    db.refresh(action_judgment)
+                    # Get the pre-rolled judgment (phase=0) created by analyze_actions
+                    action_judgment = db.query(ActionJudgment).filter(
+                        ActionJudgment.session_id == session_id,
+                        ActionJudgment.character_id == analysis.character_id,
+                        ActionJudgment.phase == 0
+                    ).order_by(ActionJudgment.id.desc()).first()
+
+                    if not action_judgment:
+                        logger.warning(f"사전 굴림 판정 없음: 캐릭터={analysis.character_id}")
+                        continue
 
                     # Find the player's socket ID to send judgment_ready
                     # Look up user_id from SessionParticipant
@@ -1647,7 +1702,7 @@ async def commit_actions(sid, data):
                         db.query(SessionParticipant)
                         .filter(
                             SessionParticipant.session_id == session_id,
-                            SessionParticipant.character_id == player_action.character_id,
+                            SessionParticipant.character_id == analysis.character_id,
                         )
                         .first()
                     )
@@ -1666,9 +1721,9 @@ async def commit_actions(sid, data):
                                 "judgment_ready",
                                 {
                                     "session_id": session_id,
-                                    "character_id": player_action.character_id,
+                                    "character_id": analysis.character_id,
                                     "judgment_id": action_judgment.id,
-                                    "action_text": player_action.action_text,
+                                    "action_text": analysis.action_text,
                                     "modifier": analysis.modifier,
                                     "difficulty": analysis.difficulty,
                                     "difficulty_reasoning": analysis.difficulty_reasoning,
@@ -1681,10 +1736,10 @@ async def commit_actions(sid, data):
                         "player_action_analyzed",
                         {
                             "session_id": session_id,
-                            "character_id": player_action.character_id,
+                            "character_id": analysis.character_id,
                             "character_name": character.name,
                             "judgment_id": action_judgment.id,
-                            "action_text": player_action.action_text,
+                            "action_text": analysis.action_text,
                             "modifier": analysis.modifier,
                             "difficulty": analysis.difficulty,
                             "difficulty_reasoning": analysis.difficulty_reasoning,
@@ -1693,7 +1748,7 @@ async def commit_actions(sid, data):
                         skip_sid=player_sid if participant else None,
                     )
 
-                logger.info(f"Phase 1 complete for session {session_id}: {len(analyses)} actions analyzed")
+                logger.info(f"Phase 1 완료: 세션={session_id}, {len(analyses)}개 행동 분석됨")
 
                 # Phase 2 and 3 will be triggered when players roll dice
                 # via the roll_dice event handler
@@ -1735,7 +1790,7 @@ async def session_heartbeat(sid, data):
             "last_ts": time.monotonic(),
         }
     except Exception as e:
-        logger.error(f"Error in session_heartbeat: {e}")
+        logger.error(f"session_heartbeat 에러: {e}")
 
 
 async def _maybe_end_session_if_host(session_id: int | None, user_id: int | None):
@@ -1783,7 +1838,7 @@ async def _maybe_end_session_if_host(session_id: int | None, user_id: int | None
 
         db.commit()
 
-        logger.info(f"Session {session_id} ended due to host disconnect (user_id={user_id})")
+        logger.info(f"세션 {session_id} 종료: 호스트 연결 해제 (user_id={user_id})")
 
     except Exception as e:
         print(f"Error in _maybe_end_session_if_host: {e}")

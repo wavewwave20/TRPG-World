@@ -1,9 +1,11 @@
 import logging
 import sys
 
+import litellm
 import socketio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from litellm.integrations.custom_logger import CustomLogger
 
 from app.config import ConfigurationError, validate_ai_gm_config
 from app.routes import auth, characters, sessions, story_logs
@@ -19,6 +21,28 @@ logging.basicConfig(
 # Reduce Socket.io and engineio logging noise (heartbeat 등 불필요한 로그 제거)
 logging.getLogger("socketio.server").setLevel(logging.ERROR)
 logging.getLogger("engineio.server").setLevel(logging.ERROR)
+
+# Disable LiteLLM's internal verbose logging (prevents duplicate log messages)
+
+
+litellm.suppress_debug_info = True
+logging.getLogger("LiteLLM").setLevel(logging.WARNING)
+
+# Custom LiteLLM logger for usage tracking
+llm_logger = logging.getLogger("ai_gm.llm_usage")
+
+class LLMUsageLogger(CustomLogger):
+    def log_pre_api_call(self, model, messages, kwargs):
+        """LLM API 호출 시작 시점에 로그"""
+        llm_logger.info(f"[LlmCall] 모델: {model} 호출 시작")
+    
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        model = kwargs.get("model")
+        usage = response_obj.get("usage", {})
+        cost = kwargs.get("response_cost", 0)
+        llm_logger.info(f"[LlmUsage] 모델: {model}, 토큰 사용량: {usage}, 비용: {cost}, 소요 시간: {end_time - start_time}초")
+
+litellm.callbacks = [LLMUsageLogger()]
 
 # Ensure stdout uses UTF-8 encoding
 if sys.stdout.encoding != "utf-8":

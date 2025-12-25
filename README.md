@@ -171,10 +171,7 @@ VITE_WS_URL=http://localhost:8000
 - [프론트엔드 README](./frontend/README.md) - 프론트엔드 상세 문서
 - [리팩토링 가이드](./backend/REFACTORING_GUIDE.md) - AI 서비스 리팩토링 문서
 
-## 라이선스
 
-MIT License
-
-## 기여
-
-이슈와 풀 리퀘스트를 환영합니다!
+## 실행
+cd backend && uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+cd frontend && npm run dev

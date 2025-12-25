@@ -393,8 +393,8 @@ export default function JudgmentPanel({ judgments, currentJudgmentIndex }: Judgm
                       onClick={() => {
                         const currentSession = useGameStore.getState().currentSession;
                         if (currentSession) {
-                          // Trigger story generation for the last judgment
-                          emit('trigger_story_generation', {
+                          // **NEW: Request narrative stream (optimized flow)**
+                          emit('request_narrative_stream', {
                             session_id: currentSession.id
                           });
                         }

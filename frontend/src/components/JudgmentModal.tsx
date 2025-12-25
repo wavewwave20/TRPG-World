@@ -117,7 +117,8 @@ function JudgmentModal({ isOpen, onClose, sessionId }: JudgmentModalProps) {
   }, [emit, currentJudgment, currentJudgmentIndex, sessionId]);
 
   const handleTriggerStory = useCallback(() => {
-    emit('trigger_story_generation', { session_id: sessionId });
+    // **NEW: Request narrative stream (optimized flow)**
+    emit('request_narrative_stream', { session_id: sessionId });
   }, [emit, sessionId]);
 
   const handleOverlayClick = useCallback((e: React.MouseEvent) => {

@@ -10,7 +10,7 @@ import { getStoryLogs } from '../services/api';
 // SessionCreationForm removed from in-session view
 import ModerationModal from './ModerationModal';
 import TypingText from './TypingText';
-import AIGenerationIndicator from './AIGenerationIndicator';
+// import AIGenerationIndicator from './AIGenerationIndicator'; // REMOVED for streaming optimization
 import JudgmentResultsButton from './JudgmentResultsButton';
 import type { JudgmentSummary } from '../services/api';
 
@@ -58,14 +58,50 @@ export default function CenterPane() {
     }
   }, [currentSession, setEntries]);
 
-  // Auto-scroll to latest entry when entries change
+  // Reload story logs when narrative streaming completes
+  const skipNextScrollRef = useRef<boolean>(false);
   useEffect(() => {
+    const handleStoryLogsUpdated = (event: CustomEvent<{ session_id: number }>) => {
+      if (currentSession && event.detail.session_id === currentSession.id) {
+        // Skip scroll when reloading after narrative complete
+        skipNextScrollRef.current = true;
+        getStoryLogs(currentSession.id)
+          .then((data) => {
+            setEntries(data.logs);
+          })
+          .catch((error) => {
+            console.error('Failed to reload story logs:', error);
+          });
+      }
+    };
+
+    window.addEventListener('story_logs_updated', handleStoryLogsUpdated as EventListener);
+    return () => {
+      window.removeEventListener('story_logs_updated', handleStoryLogsUpdated as EventListener);
+    };
+  }, [currentSession, setEntries]);
+
+  // Auto-scroll to latest entry when entries change (skip after narrative complete)
+  useEffect(() => {
+    if (skipNextScrollRef.current) {
+      skipNextScrollRef.current = false;
+      return;
+    }
     storyEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [entries]);
 
-  // Auto-scroll to latest content when narrative is streaming
+  // Scroll to narrative start only once when streaming begins
+  const hasScrolledToNarrativeRef = useRef<boolean>(false);
   useEffect(() => {
-    if (currentNarrative && narrativeEndRef.current) {
+    // Reset scroll flag when narrative is cleared
+    if (!currentNarrative) {
+      hasScrolledToNarrativeRef.current = false;
+      return;
+    }
+    
+    // Scroll only once when narrative first appears
+    if (currentNarrative && !hasScrolledToNarrativeRef.current && narrativeEndRef.current) {
+      hasScrolledToNarrativeRef.current = true;
       narrativeEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [currentNarrative]);
@@ -239,24 +275,11 @@ export default function CenterPane() {
       
       {/* Story Content Section */}
       <div className="flex-1 overflow-y-auto p-6 space-y-6 scroll-smooth bg-slate-50/50 relative">
-        {/* AI Generation Indicator - positioned above story content */}
-        <AIGenerationIndicator isGenerating={isGenerating} />
+        {/* AI Generation Indicator - REMOVED for streaming optimization */}
+        {/* <AIGenerationIndicator isGenerating={isGenerating} /> */}
         
         {currentSession ? (
           <>
-            {/* Streaming Narrative - only show after all judgments are complete */}
-            {currentNarrative && (judgments.length === 0 || judgments.every(j => j.status === 'complete')) && (
-              <div className="flex flex-col max-w-3xl mr-auto items-start">
-                <div className="text-[10px] font-bold uppercase tracking-wider mb-1 px-1 text-slate-500">
-                  던전 마스터
-                </div>
-                <div className="px-6 py-4 rounded-2xl shadow-sm text-sm leading-relaxed whitespace-pre-wrap max-w-full bg-white text-slate-700 border border-slate-200 rounded-tl-none font-serif">
-                  <TypingText text={currentNarrative} speed={50} />
-                </div>
-                <div ref={narrativeEndRef} />
-              </div>
-            )}
-            
             {entries.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-48 text-slate-400 text-center">
                 <div className="text-4xl mb-3">📜</div>
@@ -312,11 +335,7 @@ export default function CenterPane() {
                           : 'bg-white text-slate-700 border border-slate-200 rounded-tl-none font-serif'
                       }`}
                     >
-                      {isNewestEntry ? (
-                        <TypingText text={entry.content} speed={50} />
-                      ) : (
-                        entry.content
-                      )}
+                      {entry.content}
                       
                       {/* Show judgment results button for USER messages with judgments */}
                       {entry.role === 'USER' && entry.judgments && entry.judgments.length > 0 && (
@@ -330,6 +349,20 @@ export default function CenterPane() {
                 );
               })
             )}
+            
+            {/* Streaming Narrative - show at the bottom when narrative is being generated */}
+            {currentNarrative && (
+              <div className="flex flex-col max-w-3xl mr-auto items-start">
+                <div className="text-[10px] font-bold uppercase tracking-wider mb-1 px-1 text-slate-500">
+                  던전 마스터
+                </div>
+                <div className="px-6 py-4 rounded-2xl shadow-sm text-sm leading-relaxed whitespace-pre-wrap max-w-full bg-white text-slate-700 border border-slate-200 rounded-tl-none font-serif">
+                  <span>{currentNarrative}</span>
+                  {isGenerating && <span className="inline-block w-2 h-4 ml-0.5 bg-slate-400 animate-pulse align-middle" />}
+                </div>
+              </div>
+            )}
+            <div ref={narrativeEndRef} />
             <div ref={storyEndRef} />
           </>
         ) : (
