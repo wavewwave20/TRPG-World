@@ -18,6 +18,49 @@ class ActionType(str, Enum):
     CHARISMA = "charisma"  # 매력 (CHA): 설득, 사교, 거짓말
 
 
+def calculate_total_modifier(
+    ability_score: int,
+    action_type_value: str,
+    skills: list,
+    status_effects: list,
+) -> int:
+    """
+    보정치 통합 계산 함수.
+
+    능력치 보정치, 스킬 숙련 보너스, 상태 효과를 모두 합산합니다.
+    judgment_node._calculate_modifier와 DiceSystem.calculate_modifier가
+    이 함수를 공유하여 로직 중복을 방지합니다.
+
+    Args:
+        ability_score: 능력치 값 (1-30)
+        action_type_value: 행동 유형 문자열 (예: "strength", "dexterity")
+        skills: 스킬 목록 (list of dict, 각 dict에 "ability" 키 가능)
+        status_effects: 상태 효과 목록 (str 또는 dict)
+
+    Returns:
+        int: 최종 보정치
+    """
+    # 1. 능력치 보정치
+    modifier = (ability_score - 10) // 2
+
+    # 2. 스킬 숙련 보너스 (+2, 한 번만 적용)
+    SKILL_PROFICIENCY_BONUS = 2
+    for skill in skills:
+        skill_ability = skill.get("ability") if isinstance(skill, dict) else getattr(skill, "ability", None)
+        if skill_ability and skill_ability == action_type_value:
+            modifier += SKILL_PROFICIENCY_BONUS
+            break
+
+    # 3. 상태 효과 보정치
+    for effect in status_effects:
+        if isinstance(effect, dict):
+            effect_modifier = effect.get("modifier", 0)
+            if isinstance(effect_modifier, int):
+                modifier += effect_modifier
+
+    return modifier
+
+
 class DiceSystem:
     """
     행동 판정을 위한 D20 주사위 시스템.
@@ -108,10 +151,7 @@ class DiceSystem:
         """
         행동에 대한 총 보정치를 계산합니다.
 
-        다음을 결합합니다:
-        - 능력치 보정치 (능력치에서)
-        - 스킬 보너스 (캐릭터 스킬에서) - TODO: 스킬 기반 보너스 구현
-        - 상태 효과 (버프/디버프)
+        calculate_total_modifier에 위임하여 judgment_node와 동일한 로직을 사용합니다.
 
         Args:
             character: Character 객체
@@ -120,23 +160,16 @@ class DiceSystem:
         Returns:
             int: 주사위 굴림에 추가할 총 보정치
         """
-        # 능력치를 가져와서 기본 보정치 계산
         ability_score = DiceSystem.get_ability_score(character, action_type)
-        ability_modifier = DiceSystem.calculate_ability_modifier(ability_score)
+        skills = character.data.get("skills", [])
+        status_effects = character.data.get("status_effects", [])
 
-        # TODO: 스킬 기반 보너스 구현
-        # 현재 스킬은 이름/설명이 있는 스킬 객체 목록으로 저장됩니다
-        # 향후 보너스를 위해 스킬을 행동 유형에 매핑할 수 있습니다
-        # 지금은 능력치 보정치만 사용합니다
-        skill_bonus = 0
-
-        # 능력치 보정치와 스킬 보너스 결합
-        base_modifier = ability_modifier + skill_bonus
-
-        # 상태 효과 적용
-        final_modifier = DiceSystem.apply_status_effects(base_modifier, character)
-
-        return final_modifier
+        return calculate_total_modifier(
+            ability_score=ability_score,
+            action_type_value=action_type.value,
+            skills=skills if isinstance(skills, list) else [],
+            status_effects=status_effects if isinstance(status_effects, list) else [],
+        )
 
     @staticmethod
     def determine_outcome(dice_result: int, modifier: int, difficulty: int) -> JudgmentOutcome:

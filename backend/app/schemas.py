@@ -38,6 +38,7 @@ class JudgmentOutcome(str, Enum):
     FAILURE = "failure"  # 실패
     SUCCESS = "success"  # 성공
     CRITICAL_SUCCESS = "critical_success"  # 대성공
+    AUTO_SUCCESS = "auto_success"  # 주사위 불필요 - 자동 성공
 
 
 class PlayerAction(BaseModel):
@@ -74,8 +75,9 @@ class ActionAnalysis(BaseModel):
     action_text: str = Field(..., description="분석된 행동")
     action_type: ActionType = Field(..., description="능력치 매핑을 위한 행동 유형")
     modifier: int = Field(..., description="능력치, 스킬, 상태 효과로부터의 총 보정치")
-    difficulty: int = Field(..., ge=5, le=30, description="LLM이 결정한 난이도 등급 (DC)")
+    difficulty: int = Field(..., ge=0, le=30, description="LLM이 결정한 난이도 등급 (DC)")
     difficulty_reasoning: str = Field(..., description="DC에 대한 LLM의 추론")
+    requires_roll: bool = Field(True, description="주사위 굴림 필요 여부")
 
 
 class DiceResult(BaseModel):
@@ -127,13 +129,14 @@ class JudgmentResult(BaseModel):
 
     character_id: int = Field(..., description="캐릭터의 ID")
     action_text: str = Field(..., description="판정된 행동")
-    dice_result: int = Field(..., ge=1, le=20, description="D20 굴림 결과")
+    dice_result: int = Field(0, ge=0, le=20, description="D20 굴림 결과 (자동 성공 시 0)")
     modifier: int = Field(..., description="굴림에 적용된 총 보정치")
-    final_value: int = Field(..., description="dice_result + modifier")
-    difficulty: int = Field(..., ge=5, le=30, description="난이도 등급 (DC)")
+    final_value: int = Field(0, description="dice_result + modifier")
+    difficulty: int = Field(0, ge=0, le=30, description="난이도 등급 (DC)")
     difficulty_reasoning: str | None = Field(None, description="DC에 대한 LLM의 추론")
     outcome: JudgmentOutcome = Field(..., description="최종 판정 결과")
     outcome_reasoning: str | None = Field(None, description="판정 결과에 대한 추론")
+    requires_roll: bool = Field(True, description="주사위 굴림 필요 여부")
 
 
 class NarrativeResult(BaseModel):
@@ -157,6 +160,30 @@ class NarrativeResult(BaseModel):
     full_narrative: str = Field(default="", description="완전히 생성된 서술 텍스트")
     narrative_stream: AsyncIterator[str] | None = Field(None, exclude=True)
     is_complete: bool = Field(default=False, description="서술 생성 완료 여부")
+
+
+class StatusEffectCategory(str, Enum):
+    """상태 효과 카테고리."""
+
+    PHYSICAL = "physical"  # 육체적 상태 (부상, 피로 등)
+    MENTAL = "mental"  # 정신적 상태 (공포, 혼란 등)
+
+
+class StatusEffect(BaseModel):
+    """
+    구조화된 상태 효과.
+
+    캐릭터에게 부여되는 상태 효과를 표현합니다.
+    severity에 따라 modifier가 자동 적용되며,
+    duration 페이즈 후 severity가 1씩 감소합니다.
+    """
+
+    name: str = Field(..., description="상태 이름 (예: '화상', '공포')")
+    category: StatusEffectCategory = Field(StatusEffectCategory.PHYSICAL, description="육체적/정신적 분류")
+    severity: int = Field(0, ge=-3, le=3, description="심각도 (-3~+3, 음수=디버프)")
+    modifier: int = Field(0, description="능력치 보정치에 적용되는 수치")
+    duration: int = Field(3, ge=0, description="자동 회복까지 남은 페이즈 수 (0=영구)")
+    description: str = Field("", description="상태 설명")
 
 
 class CharacterSheet(BaseModel):
@@ -183,7 +210,7 @@ class CharacterSheet(BaseModel):
     # 스킬과 보정치
     skills: list[dict[str, Any]] = Field(default_factory=list, description="유형, 이름, 설명이 포함된 스킬 목록")
     weaknesses: list[str] = Field(default_factory=list)
-    status_effects: list[str] = Field(default_factory=list)
+    status_effects: list[str | dict[str, Any]] = Field(default_factory=list)
 
 
 class StoryLogEntry(BaseModel):

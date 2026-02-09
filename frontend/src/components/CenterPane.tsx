@@ -9,10 +9,24 @@ import { useAIStore } from '../stores/aiStore';
 import { getStoryLogs } from '../services/api';
 // SessionCreationForm removed from in-session view
 import ModerationModal from './ModerationModal';
-import TypingText from './TypingText';
+// import TypingText from './TypingText'; // Currently unused
 // import AIGenerationIndicator from './AIGenerationIndicator'; // REMOVED for streaming optimization
 import JudgmentResultsButton from './JudgmentResultsButton';
 import type { JudgmentSummary } from '../services/api';
+
+/**
+ * **text** 패턴을 <strong> 태그로 변환하는 렌더러.
+ * 마크다운 중 볼드체만 지원합니다.
+ */
+function renderBoldText(text: string): React.ReactNode[] {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, i) => {
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return <strong key={i} className="font-bold">{part.slice(2, -2)}</strong>;
+    }
+    return <span key={i}>{part}</span>;
+  });
+}
 
 export default function CenterPane() {
   const [actionText, setActionText] = useState('');
@@ -207,6 +221,11 @@ export default function CenterPane() {
 
   // Leaving handled via App header back button
 
+  const handleStartGame = () => {
+    if (!currentSession) return;
+    emit('start_game', { session_id: currentSession.id });
+  };
+
   const handleSubmitAction = () => {
     // Validate action text is non-empty
     if (!actionText.trim()) {
@@ -280,15 +299,22 @@ export default function CenterPane() {
         
         {currentSession ? (
           <>
-            {entries.length === 0 ? (
+            {entries.length === 0 && !currentNarrative ? (
               <div className="flex flex-col items-center justify-center h-48 text-slate-400 text-center">
                 <div className="text-4xl mb-3">📜</div>
                 <p>스토리북이 비어있습니다. 당신의 모험이 쓰여지길 기다립니다...</p>
+                {isHost && (
+                  <button
+                    onClick={handleStartGame}
+                    disabled={isGenerating}
+                    className="mt-4 bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2.5 rounded-lg text-sm font-bold shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isGenerating ? '이야기 생성 중...' : '게임 시작'}
+                  </button>
+                )}
               </div>
             ) : (
-              entries.map((entry, index) => {
-                const isNewestEntry = index === entries.length - 1;
-                
+              entries.map((entry) => {
                 // Debug log for ALL messages to see what data we have
                 console.log(`📝 ${entry.role} Message:`, {
                   id: entry.id,
@@ -335,8 +361,8 @@ export default function CenterPane() {
                           : 'bg-white text-slate-700 border border-slate-200 rounded-tl-none font-serif'
                       }`}
                     >
-                      {entry.content}
-                      
+                      {renderBoldText(entry.content)}
+
                       {/* Show judgment results button for USER messages with judgments */}
                       {entry.role === 'USER' && entry.judgments && entry.judgments.length > 0 && (
                         <JudgmentResultsButton 
@@ -357,7 +383,7 @@ export default function CenterPane() {
                   던전 마스터
                 </div>
                 <div className="px-6 py-4 rounded-2xl shadow-sm text-sm leading-relaxed whitespace-pre-wrap max-w-full bg-white text-slate-700 border border-slate-200 rounded-tl-none font-serif">
-                  <span>{currentNarrative}</span>
+                  <span>{renderBoldText(currentNarrative)}</span>
                   {isGenerating && <span className="inline-block w-2 h-4 ml-0.5 bg-slate-400 animate-pulse align-middle" />}
                 </div>
               </div>

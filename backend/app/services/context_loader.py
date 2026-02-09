@@ -218,7 +218,7 @@ def _character_to_sheet(character: Character) -> CharacterSheet:
     """
     data = character.data or {}
 
-    # Extract ability scores
+    # Extract ability scores - support both top-level keys (new) and nested ability_scores (legacy)
     ability_scores = data.get("ability_scores", {})
 
     # Extract skills - convert dict to list of dicts
@@ -256,13 +256,36 @@ def _character_to_sheet(character: Character) -> CharacterSheet:
         age=data.get("age"),
         race=data.get("race"),
         concept=data.get("concept"),
-        strength=ability_scores.get("STR", 10),
-        dexterity=ability_scores.get("DEX", 10),
-        constitution=ability_scores.get("CON", 10),
-        intelligence=ability_scores.get("INT", 10),
-        wisdom=ability_scores.get("WIS", 10),
-        charisma=ability_scores.get("CHA", 10),
+        strength=data.get("strength") or ability_scores.get("STR", 10),
+        dexterity=data.get("dexterity") or ability_scores.get("DEX", 10),
+        constitution=data.get("constitution") or ability_scores.get("CON", 10),
+        intelligence=data.get("intelligence") or ability_scores.get("INT", 10),
+        wisdom=data.get("wisdom") or ability_scores.get("WIS", 10),
+        charisma=data.get("charisma") or ability_scores.get("CHA", 10),
         skills=skills,
         weaknesses=weaknesses,
         status_effects=status_effects,
     )
+
+
+def extract_starting_situation(world_prompt: str) -> str | None:
+    """세계관 프롬프트에서 '시작 상황' 섹션의 텍스트를 추출합니다.
+
+    '시작 상황:' 헤더 이후의 모든 텍스트를 반환합니다.
+    헤더가 없으면 None을 반환합니다.
+
+    Args:
+        world_prompt: 세계관 프롬프트 전체 텍스트
+
+    Returns:
+        str | None: 시작 상황 텍스트 또는 None
+    """
+    import re
+
+    pattern = r"시작\s*상황\s*:"
+    match = re.search(pattern, world_prompt)
+    if not match:
+        return None
+
+    text = world_prompt[match.end() :].strip()
+    return text if text else None

@@ -70,6 +70,8 @@ class SessionStateManager:
         self._session_states: dict[int, RoundState] = {}
         # Round counter per session
         self._round_counters: dict[int, int] = {}
+        # Phase counter per session (for recovery tracking)
+        self._phase_counters: dict[int, int] = {}
 
     def initialize_round(
         self, session_id: int, character_ids: list[int], analyses: dict[int, dict[str, Any]] | None = None
@@ -382,10 +384,59 @@ class SessionStateManager:
             del self._round_counters[session_id]
             cleared = True
 
+        if session_id in self._phase_counters:
+            del self._phase_counters[session_id]
+            cleared = True
+
         if cleared:
             logger.info(f"Cleared all state for session {session_id}")
 
         return cleared
+
+    def increment_phase(self, session_id: int) -> int:
+        """
+        세션의 페이즈 카운터를 증가시킵니다.
+
+        매 내러티브 완료 후 호출되어 회복 타이밍을 추적합니다.
+
+        Args:
+            session_id: 게임 세션 ID
+
+        Returns:
+            int: 증가된 페이즈 카운트
+        """
+        if session_id not in self._phase_counters:
+            self._phase_counters[session_id] = 0
+        self._phase_counters[session_id] += 1
+
+        logger.debug(f"Phase counter for session {session_id}: {self._phase_counters[session_id]}")
+        return self._phase_counters[session_id]
+
+    def get_phase_count(self, session_id: int) -> int:
+        """
+        세션의 현재 페이즈 카운트를 반환합니다.
+
+        Args:
+            session_id: 게임 세션 ID
+
+        Returns:
+            int: 현재 페이즈 카운트
+        """
+        return self._phase_counters.get(session_id, 0)
+
+    def should_apply_recovery(self, session_id: int, recovery_interval: int = 3) -> bool:
+        """
+        현재 페이즈에서 회복을 적용해야 하는지 확인합니다.
+
+        Args:
+            session_id: 게임 세션 ID
+            recovery_interval: 회복 간격 (기본 3 페이즈마다)
+
+        Returns:
+            bool: 회복 적용 여부
+        """
+        phase_count = self.get_phase_count(session_id)
+        return phase_count > 0 and phase_count % recovery_interval == 0
 
 
 # Global singleton instance
@@ -478,7 +529,7 @@ def check_all_rolled_from_db(db: Session, session_id: int, round_id: int) -> boo
                 and_(
                     DiceRollState.session_id == session_id,
                     DiceRollState.round_id == round_id,
-                    DiceRollState.has_rolled == False,
+                    DiceRollState.has_rolled.is_(False),
                 )
             )
             .count()
@@ -510,7 +561,7 @@ def get_dice_results_from_db(db: Session, session_id: int, round_id: int) -> lis
                 and_(
                     DiceRollState.session_id == session_id,
                     DiceRollState.round_id == round_id,
-                    DiceRollState.has_rolled == True,
+                    DiceRollState.has_rolled.is_(True),
                 )
             )
             .all()

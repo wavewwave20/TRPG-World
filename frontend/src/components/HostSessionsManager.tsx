@@ -4,6 +4,8 @@ import { useGameStore } from "../stores/gameStore";
 import { useSocketStore } from "../stores/socketStore";
 import { useChatStore } from "../stores/chatStore";
 
+const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+
 interface HostSessionItem {
   id: number;
   title: string;
@@ -30,7 +32,7 @@ export default function HostSessionsManager() {
     try {
       setError(null);
       if (!loading) setRefreshing(true);
-      const res = await fetch(`http://localhost:8000/api/sessions/host/${userId}`);
+      const res = await fetch(`${API_BASE_URL}/api/sessions/host/${userId}`);
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setItems(data);
@@ -54,12 +56,12 @@ export default function HostSessionsManager() {
     }
     try {
       const res = await fetch(
-        `http://localhost:8000/api/sessions/${id}/restart?user_id=${userId}`,
+        `${API_BASE_URL}/api/sessions/${id}/restart?user_id=${userId}`,
         { method: "POST" }
       );
       if (!res.ok) throw new Error(await res.text());
       // Ensure participant record and socket join
-      await fetch(`http://localhost:8000/api/sessions/${id}/join`, {
+      await fetch(`${API_BASE_URL}/api/sessions/${id}/join`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user_id: userId, character_id: currentCharacter.id }),
@@ -88,7 +90,7 @@ export default function HostSessionsManager() {
     if (!userId) return;
     try {
       const res = await fetch(
-        `http://localhost:8000/api/sessions/${id}/end?user_id=${userId}`,
+        `${API_BASE_URL}/api/sessions/${id}/end?user_id=${userId}`,
         { method: "POST" }
       );
       if (!res.ok) throw new Error(await res.text());
@@ -103,7 +105,7 @@ export default function HostSessionsManager() {
     if (!userId) return;
     if (!confirm("Delete this session permanently?")) return;
     try {
-      const res = await fetch(`http://localhost:8000/api/sessions/${id}?user_id=${userId}`, {
+      const res = await fetch(`${API_BASE_URL}/api/sessions/${id}?user_id=${userId}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(await res.text());

@@ -19,7 +19,7 @@ from typing import AsyncIterator
 
 from sqlalchemy.orm import Session
 
-from app.models import ActionJudgment, StoryLog
+from app.models import ActionJudgment, Character, StoryLog
 from app.schemas import (
     ActionAnalysis,
     DiceResult,
@@ -32,6 +32,7 @@ from app.services.ai_nodes import analyze_and_judge_actions, generate_narrative,
 from app.services.background_task_manager import get_task_manager
 from app.services.context_loader import ContextLoadError, GameContext, load_game_context
 from app.services.dice_system import DiceSystem
+from app.services.session_state_manager import get_session_state_manager
 from app.services.stream_buffer import get_buffer_manager
 
 logger = logging.getLogger("ai_gm.service_v2")
@@ -81,9 +82,9 @@ class AIGMServiceV2:
     async def analyze_actions(self, session_id: int, player_actions: list[PlayerAction]) -> list[ActionAnalysis]:
         """
         Phase 1: 플레이어 행동을 분석하고 보정치 + DC를 반환합니다.
-        
+
         **Enhanced with Pre-rolling and Background Generation**
-        
+
         프로세스:
         1. 게임 컨텍스트 로드 (세션, 캐릭터, 히스토리)
         2. 캐릭터 스탯에서 보정치 계산
@@ -100,7 +101,7 @@ class AIGMServiceV2:
 
         Raises:
             ValueError: 입력 검증 실패 또는 컨텍스트 로드 실패 시
-            
+
         Requirements: 1.1, 1.2
         """
         logger.info(f"Phase 1 - 행동 분석 시작: 세션={session_id}, 행동 수={len(player_actions)}")
@@ -128,11 +129,11 @@ class AIGMServiceV2:
                 characters=game_context.characters,
                 world_context=game_context.world_prompt,
                 story_history=game_context.story_history,
-                llm_model=self.llm_model
+                llm_model=self.llm_model,
             )
 
             logger.info(f"Phase 1 완료: {len(analyses)}개 행동 분석됨")
-            
+
             # **NEW: 주사위 미리 굴림**
             judgments = await self._preroll_dice(session_id, analyses)
 
@@ -140,7 +141,7 @@ class AIGMServiceV2:
             buffer_manager = get_buffer_manager()
             await buffer_manager.create_buffer(session_id)
             logger.info(f"스트림 버퍼 생성: 세션={session_id}")
-            
+
             # **NEW: 백그라운드에서 이야기 생성 시작**
             task_manager = get_task_manager()
             await task_manager.start_task(
@@ -148,7 +149,7 @@ class AIGMServiceV2:
                 self._generate_narrative_background,
                 session_id,  # First positional arg for the coroutine
                 judgments,
-                game_context
+                game_context,
             )
             logger.info(f"백그라운드 이야기 생성 시작: 세션={session_id}")
 
@@ -212,7 +213,7 @@ class AIGMServiceV2:
                 characters=game_context.characters,
                 world_context=game_context.world_prompt,
                 story_history=game_context.story_history,
-                llm_model=self.llm_model
+                llm_model=self.llm_model,
             )
 
             logger.debug(f"이야기 생성 완료: {len(narrative)}자")
@@ -221,6 +222,9 @@ class AIGMServiceV2:
             self._save_results(session_id=session_id, judgments=judgments, narrative=narrative)
 
             logger.info("Phase 3 완료: 이야기 DB 저장됨")
+
+            # 상태 효과 회복 체크
+            self._apply_status_recovery(session_id)
 
             # 결과 반환
             result = NarrativeResult(
@@ -308,7 +312,7 @@ class AIGMServiceV2:
         """
         if outcome == JudgmentOutcome.CRITICAL_FAILURE:
             if dice_result == 1:
-                return "자연적 1이 나와 자동으로 대실패했습니다."
+                return "1이 나와 자동으로 대실패했습니다."
             return f"최종 값 {final_value}이(가) 난이도 {difficulty}보다 10 이상 낮아 대실패했습니다."
 
         if outcome == JudgmentOutcome.FAILURE:
@@ -319,50 +323,78 @@ class AIGMServiceV2:
 
         if outcome == JudgmentOutcome.CRITICAL_SUCCESS:
             if dice_result == 20:
-                return "자연적 20이 나와 자동으로 대성공했습니다!"
+                return "20이 나와 자동으로 대성공했습니다!"
             return f"최종 값 {final_value}이(가) 난이도 {difficulty}보다 10 이상 높아 대성공했습니다!"
 
         return "판정이 완료되었습니다."
-    
-    async def _preroll_dice(
-        self,
-        session_id: int,
-        analyses: list[ActionAnalysis]
-    ) -> list[JudgmentResult]:
+
+    async def _preroll_dice(self, session_id: int, analyses: list[ActionAnalysis]) -> list[JudgmentResult]:
         """
         모든 행동에 대해 주사위를 미리 굴리고 데이터베이스에 저장합니다.
-        
+
         이 메서드는 Phase 1에서 호출되어 모든 주사위 결과를 사전에 생성합니다.
         생성된 결과는 phase=0으로 저장되어 플레이어에게 아직 공개되지 않은 상태입니다.
-        
+
         Args:
             session_id: 게임 세션 ID
             analyses: 행동 분석 결과 목록
-            
+
         Returns:
             List[JudgmentResult]: 사전 굴림된 판정 결과 목록
-            
+
         Requirements: 1.1, 8.1
         """
         logger.info(f"주사위 사전 굴림: 세션={session_id}, 행동 수={len(analyses)}")
-        
+
         judgments = []
-        
+
         try:
             for analysis in analyses:
+                if not analysis.requires_roll:
+                    # 자동 성공: 주사위 굴림 불필요
+                    judgment = JudgmentResult(
+                        character_id=analysis.character_id,
+                        action_text=analysis.action_text,
+                        dice_result=0,
+                        modifier=analysis.modifier,
+                        final_value=0,
+                        difficulty=0,
+                        outcome=JudgmentOutcome.AUTO_SUCCESS,
+                        outcome_reasoning="위험이나 대립이 없는 행동으로, 자동으로 성공합니다.",
+                        requires_roll=False,
+                    )
+                    judgments.append(judgment)
+
+                    # DB에 phase=0으로 저장 (플레이어 확인 대기)
+                    action_judgment = ActionJudgment(
+                        session_id=session_id,
+                        character_id=analysis.character_id,
+                        action_text=analysis.action_text,
+                        dice_result=0,
+                        modifier=analysis.modifier,
+                        final_value=0,
+                        difficulty=0,
+                        difficulty_reasoning=analysis.difficulty_reasoning,
+                        outcome="auto_success",
+                        phase=0,  # Phase 0: 플레이어 확인 대기 (자동 성공도 확인 필요)
+                        created_at=datetime.utcnow(),
+                    )
+                    self.db.add(action_judgment)
+
+                    logger.debug(f"Auto-success for character {analysis.character_id}: {analysis.action_text}")
+                    continue
+
                 # 주사위 굴림 (1-20)
                 dice_roll = random.randint(1, 20)
-                
+
                 # 최종값 계산
                 final_value = dice_roll + analysis.modifier
-                
+
                 # 결과 판정
                 outcome = self.dice_system.determine_outcome(
-                    dice_result=dice_roll,
-                    modifier=analysis.modifier,
-                    difficulty=analysis.difficulty
+                    dice_result=dice_roll, modifier=analysis.modifier, difficulty=analysis.difficulty
                 )
-                
+
                 # 판정 결과 생성
                 judgment = JudgmentResult(
                     character_id=analysis.character_id,
@@ -372,12 +404,10 @@ class AIGMServiceV2:
                     final_value=final_value,
                     difficulty=analysis.difficulty,
                     outcome=outcome,
-                    outcome_reasoning=self._get_outcome_reasoning(
-                        dice_roll, final_value, analysis.difficulty, outcome
-                    )
+                    outcome_reasoning=self._get_outcome_reasoning(dice_roll, final_value, analysis.difficulty, outcome),
                 )
                 judgments.append(judgment)
-                
+
                 # 데이터베이스에 phase=0으로 저장 (사전 굴림)
                 action_judgment = ActionJudgment(
                     session_id=session_id,
@@ -393,56 +423,53 @@ class AIGMServiceV2:
                     created_at=datetime.utcnow(),
                 )
                 self.db.add(action_judgment)
-                
+
                 logger.debug(
                     f"Pre-rolled for character {analysis.character_id}: "
                     f"dice={dice_roll}, modifier={analysis.modifier:+d}, "
                     f"final={final_value}, DC={analysis.difficulty}, "
                     f"outcome={outcome.value}"
                 )
-            
+
             # 커밋
             self.db.commit()
-            
-            logger.info(f"주사위 사전 굴림 완료: {len(judgments)}개 결과 저장 (phase=0)")
-            
+
+            logger.info(f"주사위 사전 굴림 완료: {len(judgments)}개 결과 저장")
+
             return judgments
-            
+
         except Exception as e:
             logger.error(f"주사위 사전 굴림 실패: {e}", exc_info=True)
             self.db.rollback()
             raise
-    
+
     async def _generate_narrative_background(
-        self,
-        session_id: int,
-        judgments: list[JudgmentResult],
-        game_context: GameContext
+        self, session_id: int, judgments: list[JudgmentResult], game_context: GameContext
     ):
         """
         백그라운드에서 이야기를 생성하고 버퍼에 저장합니다.
-        
+
         이 메서드는 LLM 스트리밍 API를 호출하여 토큰을 하나씩 받아
         StreamBuffer에 저장합니다. 이 작업은 백그라운드 태스크로 실행되며,
         플레이어가 주사위를 확인하는 동안 병렬로 진행됩니다.
-        
+
         Args:
             session_id: 게임 세션 ID
             judgments: 사전 굴림된 판정 결과 목록
             game_context: 게임 컨텍스트 (캐릭터, 세계관, 히스토리)
-            
+
         Requirements: 1.2, 1.4
         """
         logger.info(f"백그라운드 이야기 생성 시작: 세션={session_id}")
-        
+
         # 버퍼 가져오기
         buffer_manager = get_buffer_manager()
         buffer = buffer_manager.get_buffer(session_id)
-        
+
         if not buffer:
             logger.error(f"버퍼를 찾을 수 없음: 세션={session_id}")
             return
-        
+
         try:
             # LLM 스트리밍 호출
             token_count = 0
@@ -451,7 +478,7 @@ class AIGMServiceV2:
                 characters=game_context.characters,
                 world_context=game_context.world_prompt,
                 story_history=game_context.story_history,
-                llm_model=self.llm_model
+                llm_model=self.llm_model,
             ):
                 # 버퍼에 토큰 추가
                 success = await buffer.add_token(token)
@@ -460,20 +487,16 @@ class AIGMServiceV2:
                 if not success:
                     logger.warning(f"버퍼 가득 참: 세션={session_id}, 생성 중단")
                     break
-            
+
             buffer.mark_complete()
             logger.info(f"백그라운드 이야기 생성 완료: 세션={session_id}")
-            
+
         except Exception as e:
             error_msg = f"이야기 생성 실패: {str(e)}"
             logger.error(f"백그라운드 생성 에러: 세션={session_id}, {e}", exc_info=True)
             buffer.mark_error(error_msg)
-    
-    async def confirm_dice_roll(
-        self,
-        session_id: int,
-        character_id: int
-    ) -> DiceResult:
+
+    async def confirm_dice_roll(self, session_id: int, character_id: int) -> DiceResult:
         """
         주사위 확인 - 미리 굴린 주사위 값을 반환합니다.
 
@@ -497,16 +520,19 @@ class AIGMServiceV2:
 
         try:
             # phase=0인 가장 최근 판정 조회 (사전 굴림)
-            judgment = self.db.query(ActionJudgment).filter(
-                ActionJudgment.session_id == session_id,
-                ActionJudgment.character_id == character_id,
-                ActionJudgment.phase == 0
-            ).order_by(ActionJudgment.id.desc()).first()
+            judgment = (
+                self.db.query(ActionJudgment)
+                .filter(
+                    ActionJudgment.session_id == session_id,
+                    ActionJudgment.character_id == character_id,
+                    ActionJudgment.phase == 0,
+                )
+                .order_by(ActionJudgment.id.desc())
+                .first()
+            )
 
             if not judgment:
-                raise ValueError(
-                    f"사전 굴림된 주사위 없음: 세션={session_id}, 캐릭터={character_id}"
-                )
+                raise ValueError(f"사전 굴림된 주사위 없음: 세션={session_id}, 캐릭터={character_id}")
 
             # phase를 2로 변경 (플레이어 확인 완료)
             judgment.phase = 2
@@ -517,63 +543,63 @@ class AIGMServiceV2:
                 f"주사위={judgment.dice_result}, 최종={judgment.final_value}, "
                 f"결과={judgment.outcome}"
             )
-            
+
             # 결과 반환
             return DiceResult(
                 character_id=character_id,
                 action_text=judgment.action_text,
                 dice_roll=judgment.dice_result,
                 modifier=judgment.modifier,
-                difficulty=judgment.difficulty
+                difficulty=judgment.difficulty,
             )
-            
+
         except Exception as e:
             logger.error(f"주사위 확인 실패: {e}", exc_info=True)
             self.db.rollback()
             raise
-    
+
     async def stream_narrative(self, session_id: int) -> AsyncIterator[str]:
         """
         버퍼에서 이야기를 스트리밍으로 전송합니다.
-        
+
         이 메서드는 Phase 3에서 호출되며, 백그라운드에서 생성된 이야기를
         클라이언트로 스트리밍합니다. 버퍼가 아직 완료되지 않았다면 새 토큰을
         기다리면서 스트리밍하고, 완료되면 모든 토큰을 전송한 후 데이터베이스에
         저장합니다.
-        
+
         Args:
             session_id: 게임 세션 ID
-            
+
         Yields:
             str: 이야기 토큰
-            
+
         Raises:
             ValueError: 버퍼를 찾을 수 없거나 에러가 발생한 경우
-            
+
         Requirements: 1.3, 1.5, 10.1, 10.2, 10.3, 10.4
         """
         logger.info(f"이야기 스트리밍 시작: 세션={session_id}")
-        
+
         # 버퍼 가져오기
         buffer_manager = get_buffer_manager()
         buffer = buffer_manager.get_buffer(session_id)
-        
+
         if not buffer:
             raise ValueError(f"이야기 버퍼 없음: 세션={session_id}")
-        
+
         if buffer.error:
             raise ValueError(f"이야기 생성 실패: {buffer.error}")
-        
+
         # 토큰 스트리밍
         index = 0
         token_count = 0
-        
+
         while True:
             # 버퍼에서 토큰 가져오기
             tokens = buffer.get_tokens(start_index=index)
-            
+
             logger.debug(f"Got {len(tokens)} tokens from buffer (index={index}, complete={buffer.is_complete})")
-            
+
             # 토큰 전송 (50ms 간격으로 타이핑 효과)
             for token in tokens:
                 logger.debug(f"Yielding token: {token[:20]}..." if len(token) > 20 else f"Yielding token: {token}")
@@ -581,32 +607,34 @@ class AIGMServiceV2:
                 index += 1
                 token_count += 1
                 await asyncio.sleep(0.05)  # 50ms = 20 tokens/second
-            
+
             if buffer.is_complete:
                 logger.info(f"이야기 스트리밍 완료: 세션={session_id}, 토큰={token_count}개")
                 break
-            
+
             # 새 토큰 대기
             await asyncio.sleep(0.1)
-        
+
         try:
             full_narrative = buffer.get_full_text()
             await self._save_narrative_to_database(session_id, full_narrative)
             logger.info(f"이야기 DB 저장 완료: 세션={session_id}")
+            # 상태 효과 회복 체크
+            self._apply_status_recovery(session_id)
         except Exception as e:
             logger.error(f"이야기 저장 실패: {e}", exc_info=True)
-    
+
     async def _save_narrative_to_database(self, session_id: int, narrative: str):
         """
         이야기를 데이터베이스에 저장합니다.
-        
+
         StoryLog를 생성하고 모든 ActionJudgment를 phase=3으로 업데이트합니다.
         단일 트랜잭션으로 처리됩니다.
-        
+
         Args:
             session_id: 게임 세션 ID
             narrative: 생성된 이야기 전체 텍스트
-            
+
         Requirements: 8.4, 8.5
         """
         try:
@@ -619,25 +647,23 @@ class AIGMServiceV2:
             )
             self.db.add(story_log)
             self.db.flush()  # story_log.id 획득
-            
+
             # 모든 phase=2 ActionJudgment를 phase=3으로 업데이트
-            judgments = self.db.query(ActionJudgment).filter(
-                ActionJudgment.session_id == session_id,
-                ActionJudgment.phase == 2
-            ).all()
-            
+            judgments = (
+                self.db.query(ActionJudgment)
+                .filter(ActionJudgment.session_id == session_id, ActionJudgment.phase == 2)
+                .all()
+            )
+
             for judgment in judgments:
                 judgment.story_log_id = story_log.id
                 judgment.phase = 3  # Phase 3: 서술 완료
-            
+
             # 커밋
             self.db.commit()
-            
-            logger.info(
-                f"이야기 DB 저장: story_log_id={story_log.id}, "
-                f"{len(judgments)}개 판정 phase=3으로 업데이트"
-            )
-            
+
+            logger.info(f"이야기 DB 저장: story_log_id={story_log.id}, {len(judgments)}개 판정 phase=3으로 업데이트")
+
         except Exception as e:
             logger.error(f"이야기 DB 저장 실패: {e}", exc_info=True)
             self.db.rollback()
@@ -692,3 +718,69 @@ class AIGMServiceV2:
             logger.error(f"결과 저장 실패: {e}", exc_info=True)
             self.db.rollback()
             raise
+
+    def _apply_status_recovery(self, session_id: int) -> None:
+        """
+        페이즈 기반 상태 회복을 적용합니다.
+
+        매 내러티브 완료 후 호출됩니다.
+        3 페이즈마다 모든 캐릭터의 구조화된 상태 효과의 severity를 1 감소시키고,
+        severity가 0이 된 효과는 제거합니다.
+
+        Args:
+            session_id: 게임 세션 ID
+        """
+        state_manager = get_session_state_manager()
+        phase = state_manager.increment_phase(session_id)
+
+        if not state_manager.should_apply_recovery(session_id):
+            logger.debug(f"Phase {phase}: 회복 미적용 (3페이즈마다 적용)")
+            return
+
+        logger.info(f"Phase {phase}: 상태 회복 적용 시작 (세션={session_id})")
+
+        try:
+            # 세션에 속한 캐릭터 조회
+            characters = self.db.query(Character).filter(Character.session_id == session_id).all()
+
+            for char in characters:
+                data = char.data or {}
+                status_effects = data.get("status_effects", [])
+
+                if not status_effects:
+                    continue
+
+                updated_effects = []
+                for effect in status_effects:
+                    if isinstance(effect, dict) and "severity" in effect:
+                        # 구조화된 효과: severity 감소
+                        new_severity = effect["severity"]
+                        if new_severity < 0:
+                            new_severity = min(new_severity + 1, 0)  # 디버프 회복
+                        elif new_severity > 0:
+                            new_severity = max(new_severity - 1, 0)  # 버프 감소
+
+                        if new_severity != 0:
+                            effect["severity"] = new_severity
+                            effect["modifier"] = new_severity  # modifier도 동기화
+                            updated_effects.append(effect)
+                        else:
+                            logger.info(f"캐릭터 {char.id}: 상태 '{effect.get('name', '?')}' 회복 완료")
+                    else:
+                        # 문자열 효과: 유지 (수동 제거만 가능)
+                        updated_effects.append(effect)
+
+                if len(updated_effects) != len(status_effects):
+                    data["status_effects"] = updated_effects
+                    char.data = data
+                    # SQLAlchemy JSON 변경 감지를 위해 flag
+                    from sqlalchemy.orm.attributes import flag_modified
+
+                    flag_modified(char, "data")
+
+            self.db.commit()
+            logger.info(f"Phase {phase}: 상태 회복 적용 완료 (세션={session_id})")
+
+        except Exception as e:
+            logger.error(f"상태 회복 적용 실패: {e}", exc_info=True)
+            self.db.rollback()

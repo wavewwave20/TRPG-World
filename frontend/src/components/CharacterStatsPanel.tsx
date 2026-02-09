@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import type { Character } from '../types/character';
+import type { Character, AbilityKey, StatusEffect } from '../types/character';
+import { ABILITY_SHORT_LABELS } from '../types/character';
 
 interface CharacterStatsPanelProps {
   character: Character;
@@ -105,6 +106,14 @@ export default function CharacterStatsPanel({ character }: CharacterStatsPanelPr
                           {skill.type === 'passive' ? 'P' : 'A'}
                         </span>
                       )}
+                      {skill.ability && (
+                        <span
+                          className="text-xs px-1.5 py-0.5 rounded font-medium bg-blue-100 text-blue-700"
+                          aria-label={`주요 능력치: ${ABILITY_SHORT_LABELS[skill.ability as AbilityKey] || skill.ability}`}
+                        >
+                          {ABILITY_SHORT_LABELS[skill.ability as AbilityKey] || skill.ability}
+                        </span>
+                      )}
                       <span className="text-sm font-semibold text-slate-800">
                         {skill.name}
                       </span>
@@ -138,22 +147,75 @@ export default function CharacterStatsPanel({ character }: CharacterStatsPanelPr
         )}
 
         {/* Status Effects */}
-        {data.status_effects && data.status_effects.length > 0 && (
-          <div role="group" aria-labelledby="status-effects-heading">
-            <h4 id="status-effects-heading" className="text-xs font-semibold text-slate-500 uppercase mb-2">상태 효과</h4>
-            <div className="flex flex-wrap gap-1.5" role="list" aria-label={`상태 효과 목록, 총 ${data.status_effects.length}개`}>
-              {data.status_effects.map((effect, index) => (
-                <span
-                  key={index}
-                  className="bg-amber-100 text-amber-800 px-2 py-1 rounded text-xs font-medium"
-                  role="listitem"
-                >
-                  {effect}
-                </span>
-              ))}
+        {data.status_effects && data.status_effects.length > 0 && (() => {
+          const structured: StatusEffect[] = [];
+          const plain: string[] = [];
+          for (const effect of data.status_effects) {
+            if (typeof effect === 'string') {
+              plain.push(effect);
+            } else {
+              structured.push(effect);
+            }
+          }
+          const physical = structured.filter(e => e.category === 'physical');
+          const mental = structured.filter(e => e.category === 'mental');
+
+          const severityColor = (severity: number) => {
+            if (severity <= -2) return 'bg-red-200 text-red-900';
+            if (severity === -1) return 'bg-orange-100 text-orange-800';
+            if (severity === 0) return 'bg-slate-100 text-slate-600';
+            if (severity === 1) return 'bg-green-100 text-green-800';
+            return 'bg-emerald-200 text-emerald-900';
+          };
+
+          const renderStructured = (effects: StatusEffect[], label: string) => (
+            effects.length > 0 && (
+              <div className="space-y-1">
+                <span className="text-xs text-slate-400">{label}</span>
+                <div className="flex flex-wrap gap-1.5" role="list">
+                  {effects.map((effect, i) => (
+                    <span
+                      key={i}
+                      className={`px-2 py-1 rounded text-xs font-medium ${severityColor(effect.severity)}`}
+                      role="listitem"
+                      title={effect.description || `${effect.name} (${effect.severity > 0 ? '+' : ''}${effect.severity})`}
+                    >
+                      {effect.name}
+                      {effect.severity !== 0 && (
+                        <span className="ml-1 opacity-75">
+                          {effect.severity > 0 ? '+' : ''}{effect.severity}
+                        </span>
+                      )}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )
+          );
+
+          return (
+            <div role="group" aria-labelledby="status-effects-heading">
+              <h4 id="status-effects-heading" className="text-xs font-semibold text-slate-500 uppercase mb-2">상태 효과</h4>
+              <div className="space-y-2">
+                {renderStructured(physical, '육체적')}
+                {renderStructured(mental, '정신적')}
+                {plain.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5" role="list">
+                    {plain.map((effect, i) => (
+                      <span
+                        key={i}
+                        className="bg-amber-100 text-amber-800 px-2 py-1 rounded text-xs font-medium"
+                        role="listitem"
+                      >
+                        {effect}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
       </div>
     </div>
   );

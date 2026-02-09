@@ -3,8 +3,8 @@
  * Handles all HTTP requests to the backend API
  */
 
-// Base API URL - can be configured via environment variables
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+// Base API URL - empty string means use relative paths (same origin)
+const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 
 /**
  * Custom error class for API errors
@@ -238,7 +238,7 @@ export async function createSession(
     throw new ApiError('World prompt is required', 400);
   }
 
-  const url = `${API_BASE_URL}/api/sessions`;
+  const url = `${API_BASE_URL}/api/sessions/`;
   
   return fetchWithErrorHandling<CreateSessionResponse>(url, {
     method: 'POST',
@@ -310,7 +310,7 @@ export async function getStoryLogs(
  * @throws ApiError if server error occurs
  */
 export async function getSessions(): Promise<SessionListItem[]> {
-  const url = `${API_BASE_URL}/api/sessions`;
+  const url = `${API_BASE_URL}/api/sessions/`;
   
   return fetchWithErrorHandling<SessionListItem[]>(url, {
     method: 'GET',

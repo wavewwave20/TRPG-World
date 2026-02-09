@@ -13,7 +13,7 @@ export type JudgmentStatus = 'waiting' | 'active' | 'rolling' | 'complete';
 /**
  * Outcome of a dice roll judgment
  */
-export type JudgmentOutcome = 'critical_failure' | 'failure' | 'success' | 'critical_success';
+export type JudgmentOutcome = 'critical_failure' | 'failure' | 'success' | 'critical_success' | 'auto_success';
 
 /**
  * D20 ability scores
@@ -54,6 +54,9 @@ export interface JudgmentSetup {
   
   /** Order in the judgment sequence (0-indexed) */
   order: number;
+
+  /** Whether this action requires a dice roll */
+  requires_roll: boolean;
 }
 
 /**

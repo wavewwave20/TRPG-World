@@ -27,7 +27,9 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
   error: null,
   
   connect: () => {
-    const socket = io('http://localhost:8000', {
+    // Use relative path when VITE_SOCKET_URL is empty (proxied through nginx)
+    const socketUrl = import.meta.env.VITE_SOCKET_URL || window.location.origin;
+    const socket = io(socketUrl, {
       transports: ['websocket'],
       reconnection: true,
       reconnectionDelay: 1000,
@@ -248,7 +250,7 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
     
     // Judgment ready - receive single judgment setup for the player
     // Backend sends this to the player who submitted the action
-    socket.on('judgment_ready', (data: { 
+    socket.on('judgment_ready', (data: {
       session_id: number;
       character_id: number;
       judgment_id: number;
@@ -256,12 +258,13 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
       modifier: number;
       difficulty: number;
       difficulty_reasoning: string;
+      requires_roll?: boolean;
     }) => {
       console.log('Judgment ready:', data);
-      
+
       // Get current character to check if this is for us
       const currentCharacter = useGameStore.getState().currentCharacter;
-      
+
       // Create judgment setup from the received data
       const judgmentSetup: JudgmentSetup = {
         action_id: data.judgment_id,
@@ -273,26 +276,29 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
         difficulty: data.difficulty,
         difficulty_reasoning: data.difficulty_reasoning,
         status: 'active',
-        order: 0
+        order: 0,
+        requires_roll: data.requires_roll ?? true,
       };
-      
+
       // Add to existing judgments or create new list
       const currentJudgments = useAIStore.getState().judgments;
       const existingIndex = currentJudgments.findIndex(j => j.action_id === data.judgment_id);
-      
+
       if (existingIndex === -1) {
         useAIStore.getState().setJudgmentSetups([...currentJudgments, judgmentSetup]);
       }
-      
+
       // Hide loading indicator - Phase 1 is complete for this player
       useAIStore.getState().setGenerating(false);
-      
+
       // Re-enable action input after judgment is ready
       useActionStore.getState().setActionInputDisabled(false);
-      
+
       useGameStore.getState().addNotification({
         type: 'system',
-        message: '판정이 준비되었습니다. 주사위를 굴려주세요!'
+        message: data.requires_roll !== false
+          ? '판정이 준비되었습니다. 주사위를 굴려주세요!'
+          : '판정이 준비되었습니다. 확인해주세요.'
       });
     });
     
@@ -307,9 +313,10 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
       modifier: number;
       difficulty: number;
       difficulty_reasoning: string;
+      requires_roll?: boolean;
     }) => {
       console.log('Player action analyzed:', data);
-      
+
       // Create judgment setup from the received data (for other players to see)
       const judgmentSetup: JudgmentSetup = {
         action_id: data.judgment_id,
@@ -321,7 +328,8 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
         difficulty: data.difficulty,
         difficulty_reasoning: data.difficulty_reasoning,
         status: 'waiting', // Waiting for the player to roll dice
-        order: useAIStore.getState().judgments.length
+        order: useAIStore.getState().judgments.length,
+        requires_roll: data.requires_roll ?? true,
       };
       
       // Add to existing judgments
@@ -360,11 +368,11 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
       const aiState = useAIStore.getState();
       const updatedJudgments = aiState.judgments.map((judgment, index) => {
         if (index < data.judgment_index) {
-          return { ...judgment, status: 'complete' as 'complete' };
+          return { ...judgment, status: 'complete' as const };
         } else if (index === data.judgment_index) {
-          return { ...judgment, status: 'active' as 'active' };
+          return { ...judgment, status: 'active' as const };
         } else {
-          return { ...judgment, status: 'waiting' as 'waiting' };
+          return { ...judgment, status: 'waiting' as const };
         }
       });
       
@@ -381,7 +389,7 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
     
     // Dice rolled - show result to all participants
     // Backend format: session_id, character_id, character_name, judgment_id, dice_result, modifier, final_value, difficulty, outcome
-    socket.on('dice_rolled', (data: { 
+    socket.on('dice_rolled', (data: {
       session_id: number;
       character_id: number;
       character_name: string;
@@ -390,16 +398,21 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
       modifier: number;
       final_value: number;
       difficulty: number;
-      outcome: 'critical_failure' | 'failure' | 'success' | 'critical_success';
+      outcome: 'critical_failure' | 'failure' | 'success' | 'critical_success' | 'auto_success';
+      requires_roll?: boolean;
     }) => {
       console.log('Dice rolled:', data);
-      
+
+      const isAutoSuccess = data.outcome === 'auto_success';
+
       // Update judgment with result and mark as complete
       useAIStore.getState().updateJudgmentResult(data.judgment_id, {
         dice_result: data.dice_result,
         final_value: data.final_value,
         outcome: data.outcome,
-        outcome_reasoning: `주사위 ${data.dice_result} + 보정치 ${data.modifier} = ${data.final_value} vs DC ${data.difficulty}`,
+        outcome_reasoning: isAutoSuccess
+          ? '위험이나 대립이 없는 행동으로, 자동으로 성공합니다.'
+          : `주사위 ${data.dice_result} + 보정치 ${data.modifier} = ${data.final_value} vs DC ${data.difficulty}`,
         status: 'complete'
       });
       try {
@@ -409,18 +422,21 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
           useAIStore.getState().setAckRequired(data.judgment_id);
         }
       } catch {}
-      
+
       // Show outcome notification
-      const outcomeText = {
+      const outcomeText: Record<string, string> = {
         critical_failure: '대실패!',
         failure: '실패',
         success: '성공',
-        critical_success: '대성공!'
-      }[data.outcome];
-      
+        critical_success: '대성공!',
+        auto_success: '자동 성공'
+      };
+
       useGameStore.getState().addNotification({
         type: 'system',
-        message: `${data.character_name}: 주사위 ${data.dice_result} (${outcomeText})`
+        message: isAutoSuccess
+          ? `${data.character_name}: 자동 성공`
+          : `${data.character_name}: 주사위 ${data.dice_result} (${outcomeText[data.outcome] || data.outcome})`
       });
     });
     
@@ -503,6 +519,13 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
       useGameStore.getState().addError(`이야기 생성 실패: ${data.error}`);
     });
     
+    // Game start error
+    socket.on('start_game_error', (data: { session_id: number, error: string }) => {
+      console.error('Start game error:', data);
+
+      useGameStore.getState().addError(`게임 시작 실패: ${data.error}`);
+    });
+
     // Story generation started - Phase 3 begins (LEGACY - kept for backward compatibility)
     socket.on('story_generation_started', (data: { session_id: number }) => {
       console.log('Story generation started (legacy):', data);
@@ -547,7 +570,7 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
       if (data.narrative) {
         const tempEntry = {
           id: Date.now(), // Temporary ID
-          role: 'AI' as 'AI',
+          role: 'AI' as const,
           content: data.narrative,
           created_at: new Date().toISOString()
         };

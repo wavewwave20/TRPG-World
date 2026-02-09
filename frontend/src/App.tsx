@@ -12,6 +12,8 @@ import CharacterManagement from './components/CharacterManagement';
 import type { Character as BaseCharacter } from './types/character';
 import './App.css'
 
+const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+
 interface Character extends BaseCharacter {
   user_id: number;
   created_at: string;
@@ -56,10 +58,10 @@ function App() {
       try {
         if (currentSession.hostUserId === userId) {
           // Host: end the session (broadcasts session_ended to players)
-          await fetch(`http://localhost:8000/api/sessions/${currentSession.id}/end?user_id=${userId}`, { method: 'POST' });
+          await fetch(`${API_BASE_URL}/api/sessions/${currentSession.id}/end?user_id=${userId}`, { method: 'POST' });
         } else {
           // Participant: leave only
-          await fetch(`http://localhost:8000/api/sessions/${currentSession.id}/leave?user_id=${userId}`, { method: 'POST' });
+          await fetch(`${API_BASE_URL}/api/sessions/${currentSession.id}/leave?user_id=${userId}`, { method: 'POST' });
           leaveSessionSock(currentSession.id, userId);
         }
       } catch (e) {

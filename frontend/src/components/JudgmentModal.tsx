@@ -68,6 +68,27 @@ function JudgmentModal({ isOpen, onClose, sessionId }: JudgmentModalProps) {
   }, [judgments, currentJudgmentIndex]);
 
   // Memoize handler functions
+  const handleConfirmAction = useCallback((actionId: number) => {
+    if (!currentJudgment) {
+      console.error('❌ No current judgment available');
+      return;
+    }
+
+    console.log('✅ JudgmentModal: handleConfirmAction called', {
+      actionId,
+      characterId: currentJudgment.character_id,
+    });
+
+    const payload = {
+      session_id: sessionId,
+      character_id: currentJudgment.character_id,
+      judgment_id: actionId,
+    };
+
+    console.log('🔌 Socket emit:', 'confirm_action', payload);
+    emit('confirm_action', payload);
+  }, [emit, currentJudgment, sessionId]);
+
   const handleRollDice = useCallback((actionId: number) => {
     if (!currentJudgment) {
       console.error('❌ No current judgment available');
@@ -137,11 +158,17 @@ function JudgmentModal({ isOpen, onClose, sessionId }: JudgmentModalProps) {
     const status = currentJudgment.status;
     
     if (status === 'active') {
-      return `${characterName}의 판정 차례입니다. 주사위를 굴려주세요.`;
+      const requiresRoll = currentJudgment.requires_roll ?? true;
+      return requiresRoll
+        ? `${characterName}의 판정 차례입니다. 주사위를 굴려주세요.`
+        : `${characterName}의 행동은 자동 성공입니다. 확인해주세요.`;
     } else if (status === 'rolling') {
       return `${characterName}이(가) 주사위를 굴리는 중입니다...`;
     } else if (status === 'complete' && 'dice_result' in currentJudgment) {
       const result = currentJudgment as JudgmentResult;
+      if (result.outcome === 'auto_success') {
+        return `${characterName}의 행동: 자동 성공`;
+      }
       const outcomeText = result.outcome === 'critical_success' ? '대성공' :
                          result.outcome === 'success' ? '성공' :
                          result.outcome === 'failure' ? '실패' : '대실패';
@@ -292,6 +319,7 @@ function JudgmentModal({ isOpen, onClose, sessionId }: JudgmentModalProps) {
                   judgment={currentJudgment}
                   isCurrentPlayer={isCurrentPlayer}
                   onRollDice={handleRollDice}
+                  onConfirmAction={handleConfirmAction}
                   onNext={handleNext}
                   onTriggerStory={handleTriggerStory}
                   isLastJudgment={isLastJudgment}

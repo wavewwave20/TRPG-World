@@ -82,7 +82,7 @@ async def list_sessions(db: Session = Depends(get_db)):
         sessions_with_counts = (
             db.query(GameSession, func.count(SessionParticipant.id).label("participant_count"))
             .outerjoin(SessionParticipant, GameSession.id == SessionParticipant.session_id)
-            .filter(GameSession.is_active == True)
+            .filter(GameSession.is_active.is_(True))
             .group_by(GameSession.id)
             .order_by(GameSession.created_at.desc())
             .all()

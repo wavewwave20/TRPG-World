@@ -4,6 +4,8 @@ import { useSocketStore } from '../stores/socketStore';
 import { useAuthStore } from '../stores/authStore';
 import { useChatStore } from '../stores/chatStore';
 
+const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+
 interface Session {
   id: number;
   title: string;
@@ -103,7 +105,7 @@ export default function SessionList({ onJoinSuccess }: SessionListProps) {
   const loadSessions = async () => {
     try {
       if (!loading) setRefreshing(true);
-      const response = await fetch('http://localhost:8000/api/sessions/');
+      const response = await fetch(`${API_BASE_URL}/api/sessions/`);
       if (response.ok) {
         const data = await response.json();
         // Filter to only show active sessions (backend already filters, but double-check)
@@ -142,7 +144,7 @@ export default function SessionList({ onJoinSuccess }: SessionListProps) {
       // If already in another session, leave it (API + socket) and clear logs
       if (currentSession && currentSession.id !== id && userId) {
         try {
-          await fetch(`http://localhost:8000/api/sessions/${currentSession.id}/leave?user_id=${userId}`, { method: 'POST' });
+          await fetch(`${API_BASE_URL}/api/sessions/${currentSession.id}/leave?user_id=${userId}`, { method: 'POST' });
         } catch (e) {
           console.warn('Failed to call leave API for previous session:', e);
         }
@@ -154,7 +156,7 @@ export default function SessionList({ onJoinSuccess }: SessionListProps) {
       clearNotifications();
       
       // Call join session API
-      const response = await fetch(`http://localhost:8000/api/sessions/${id}/join`, {
+      const response = await fetch(`${API_BASE_URL}/api/sessions/${id}/join`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -12,6 +12,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_litellm import ChatLiteLLM
 
 from app.schemas import ActionAnalysis, ActionType, CharacterSheet, PlayerAction
+from app.services.dice_system import calculate_total_modifier
 from app.utils.prompt_loader import load_prompt
 
 logger = logging.getLogger("ai_gm.judgment_node")
@@ -22,7 +23,7 @@ async def analyze_and_judge_actions(
     characters: list[CharacterSheet],
     world_context: str,
     story_history: list[str],
-    llm_model: str = "gpt-4o",
+    llm_model: str = "gemini/gemini-3-pro-preview",
 ) -> list[ActionAnalysis]:
     """
     플레이어 행동을 분석하고 보정치와 난이도를 결정합니다.
@@ -91,11 +92,28 @@ async def analyze_and_judge_actions(
             dc_info = dc_results.get(analysis.character_id, {})
             analysis.difficulty = dc_info.get("difficulty", 15)
             analysis.difficulty_reasoning = dc_info.get("reasoning", "기본 난이도 적용")
+            analysis.requires_roll = dc_info.get("requires_roll", True)
 
-            # DC 범위 검증 (5-30)
-            analysis.difficulty = max(5, min(30, analysis.difficulty))
+            if analysis.requires_roll:
+                # DC 범위 검증 (5-30)
+                analysis.difficulty = max(5, min(30, analysis.difficulty))
 
-            logger.info(f"Character {analysis.character_id}: DC={analysis.difficulty}, modifier={analysis.modifier:+d}")
+                # DC soft-cap: 캐릭터 보정치 대비 달성 불가능한 DC를 조정
+                max_reasonable_dc = analysis.modifier + 18  # d20 최대 20, 여유 -2
+                if analysis.difficulty > max_reasonable_dc and analysis.difficulty > 20:
+                    original_dc = analysis.difficulty
+                    analysis.difficulty = min(analysis.difficulty, max(20, max_reasonable_dc))
+                    logger.warning(
+                        f"Character {analysis.character_id}: DC soft-capped "
+                        f"from {original_dc} to {analysis.difficulty} "
+                        f"(modifier={analysis.modifier:+d})"
+                    )
+
+                logger.info(f"Character {analysis.character_id}: DC={analysis.difficulty}, modifier={analysis.modifier:+d}")
+            else:
+                # 자동 성공: difficulty = 0
+                analysis.difficulty = 0
+                logger.info(f"Character {analysis.character_id}: 자동 성공 (주사위 불필요)")
 
     except Exception as e:
         logger.error(f"Failed to determine difficulty with AI: {e}")
@@ -111,7 +129,7 @@ def _calculate_modifier(character: CharacterSheet, action_type: ActionType) -> i
     """
     캐릭터 능력치에서 보정치를 계산합니다.
 
-    보정치 = (능력치 - 10) // 2
+    calculate_total_modifier에 위임하여 dice_system과 동일한 로직을 사용합니다.
 
     Args:
         character: 캐릭터 정보
@@ -130,9 +148,13 @@ def _calculate_modifier(character: CharacterSheet, action_type: ActionType) -> i
     }
 
     ability_score = ability_map.get(action_type, 10)
-    modifier = (ability_score - 10) // 2
 
-    return modifier
+    return calculate_total_modifier(
+        ability_score=ability_score,
+        action_type_value=action_type.value,
+        skills=character.skills,
+        status_effects=character.status_effects,
+    )
 
 
 async def _determine_difficulty_with_ai(
@@ -290,6 +312,7 @@ def _parse_dc_response(response_text: str) -> dict[int, dict[str, Any]]:
                 dc_map[char_id] = {
                     "difficulty": item.get("difficulty", 15),
                     "reasoning": (item.get("reasoning", "") or item.get("difficulty_reasoning", "")),
+                    "requires_roll": item.get("requires_roll", True),
                 }
 
         logger.info(f"Successfully parsed {len(dc_map)} DC results")

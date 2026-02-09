@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useAuthStore } from '../stores/authStore';
-import type { Character as BaseCharacter, Skill as BaseSkill } from '../types/character';
+import type { Character as BaseCharacter, Skill as BaseSkill, AbilityKey } from '../types/character';
+import { ABILITY_LABELS, ABILITY_SHORT_LABELS } from '../types/character';
+
+const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 
 interface Skill extends BaseSkill {
   type: 'passive' | 'active';
@@ -60,6 +63,7 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
   const [newSkillType, setNewSkillType] = useState<'passive' | 'active'>('passive');
   const [newSkillName, setNewSkillName] = useState('');
   const [newSkillDescription, setNewSkillDescription] = useState('');
+  const [newSkillAbility, setNewSkillAbility] = useState<AbilityKey | ''>('');
   
   // Weaknesses
   const [weaknesses, setWeaknesses] = useState<string[]>([]);
@@ -79,7 +83,7 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
     if (!userId) return;
     
     try {
-      const response = await fetch(`http://localhost:8000/api/characters/user/${userId}`);
+      const response = await fetch(`${API_BASE_URL}/api/characters/user/${userId}`);
       if (response.ok) {
         const data = await response.json();
         setCharacters(data);
@@ -96,7 +100,7 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
     setError('');
 
     try {
-      const response = await fetch('http://localhost:8000/api/characters/', {
+      const response = await fetch(`${API_BASE_URL}/api/characters/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -135,7 +139,7 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
     setError('');
 
     try {
-      const response = await fetch(`http://localhost:8000/api/characters/${editingCharacter.id}`, {
+      const response = await fetch(`${API_BASE_URL}/api/characters/${editingCharacter.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -171,7 +175,7 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
     if (!confirm('Are you sure you want to delete this character?')) return;
 
     try {
-      const response = await fetch(`http://localhost:8000/api/characters/${characterId}`, {
+      const response = await fetch(`${API_BASE_URL}/api/characters/${characterId}`, {
         method: 'DELETE',
       });
 
@@ -199,6 +203,7 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
     setNewSkillType('passive');
     setNewSkillName('');
     setNewSkillDescription('');
+    setNewSkillAbility('');
     setNewWeakness('');
     setError('');
   };
@@ -231,11 +236,13 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
       setSkills([...skills, {
         type: newSkillType,
         name: newSkillName.trim(),
-        description: newSkillDescription.trim()
+        description: newSkillDescription.trim(),
+        ...(newSkillAbility ? { ability: newSkillAbility } : {}),
       }]);
       setNewSkillType('passive');
       setNewSkillName('');
       setNewSkillDescription('');
+      setNewSkillAbility('');
     }
   };
 
@@ -427,7 +434,7 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
               <div className="space-y-4">
                 <h3 className="text-lg font-semibold text-slate-700 border-b pb-2">스킬</h3>
                 <div className="space-y-3 bg-slate-50 p-4 rounded-lg">
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-3 gap-3">
                     <div>
                       <label className="block text-xs font-medium text-slate-600 mb-1">타입</label>
                       <select
@@ -437,6 +444,21 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
                       >
                         <option value="passive">Passive (패시브)</option>
                         <option value="active">Active (액티브)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1">주요 능력치</label>
+                      <select
+                        value={newSkillAbility}
+                        onChange={(e) => setNewSkillAbility(e.target.value as AbilityKey | '')}
+                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all text-sm"
+                      >
+                        <option value="">선택 안함</option>
+                        {(Object.keys(ABILITY_LABELS) as AbilityKey[]).map((key) => (
+                          <option key={key} value={key}>
+                            {ABILITY_SHORT_LABELS[key]} ({ABILITY_LABELS[key]})
+                          </option>
+                        ))}
                       </select>
                     </div>
                     <div>
@@ -475,12 +497,17 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
                         <div className="flex justify-between items-start mb-1">
                           <div className="flex items-center gap-2">
                             <span className={`text-xs px-2 py-0.5 rounded ${
-                              skill.type === 'passive' 
-                                ? 'bg-purple-100 text-purple-700' 
+                              skill.type === 'passive'
+                                ? 'bg-purple-100 text-purple-700'
                                 : 'bg-orange-100 text-orange-700'
                             }`}>
                               {skill.type === 'passive' ? 'Passive' : 'Active'}
                             </span>
+                            {skill.ability && (
+                              <span className="text-xs px-2 py-0.5 rounded bg-blue-100 text-blue-700">
+                                {ABILITY_SHORT_LABELS[skill.ability as AbilityKey] || skill.ability}
+                              </span>
+                            )}
                             <span className="font-semibold text-slate-800">{skill.name}</span>
                           </div>
                           <button
@@ -651,12 +678,17 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
                         <div key={index} className="bg-slate-50 p-2 rounded text-xs">
                           <div className="flex items-center gap-2 mb-1">
                             <span className={`px-1.5 py-0.5 rounded text-xs ${
-                              skill.type === 'passive' 
-                                ? 'bg-purple-100 text-purple-700' 
+                              skill.type === 'passive'
+                                ? 'bg-purple-100 text-purple-700'
                                 : 'bg-orange-100 text-orange-700'
                             }`}>
                               {skill.type === 'passive' ? 'P' : 'A'}
                             </span>
+                            {skill.ability && (
+                              <span className="px-1.5 py-0.5 rounded text-xs bg-blue-100 text-blue-700">
+                                {ABILITY_SHORT_LABELS[skill.ability as AbilityKey] || skill.ability}
+                              </span>
+                            )}
                             <span className="font-semibold text-slate-800">{skill.name}</span>
                           </div>
                           <p className="text-slate-600 text-xs">{skill.description}</p>

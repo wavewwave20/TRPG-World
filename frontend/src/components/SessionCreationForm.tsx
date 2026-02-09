@@ -5,6 +5,8 @@ import { useSocketStore } from '../stores/socketStore';
 import { useAuthStore } from '../stores/authStore';
 import { useChatStore } from '../stores/chatStore';
 
+const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+
 interface SessionCreationFormProps {
   onSuccess?: () => void;
 }
@@ -75,7 +77,7 @@ export default function SessionCreationForm({ onSuccess }: SessionCreationFormPr
       
       // Ensure DB participant record exists so list shows correct count
       try {
-        await fetch(`http://localhost:8000/api/sessions/${response.session_id}/join`, {
+        await fetch(`${API_BASE_URL}/api/sessions/${response.session_id}/join`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

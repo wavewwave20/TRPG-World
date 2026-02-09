@@ -5,9 +5,41 @@
  * skills, weaknesses, and status effects.
  */
 
+export type AbilityKey = 'strength' | 'dexterity' | 'constitution' | 'intelligence' | 'wisdom' | 'charisma';
+
+export const ABILITY_LABELS: Record<AbilityKey, string> = {
+  strength: '근력',
+  dexterity: '민첩',
+  constitution: '건강',
+  intelligence: '지능',
+  wisdom: '지혜',
+  charisma: '매력',
+};
+
+export const ABILITY_SHORT_LABELS: Record<AbilityKey, string> = {
+  strength: 'STR',
+  dexterity: 'DEX',
+  constitution: 'CON',
+  intelligence: 'INT',
+  wisdom: 'WIS',
+  charisma: 'CHA',
+};
+
 export interface Skill {
   type?: string | 'passive' | 'active';
   name: string;
+  description?: string;
+  ability?: AbilityKey;
+}
+
+export type StatusEffectCategory = 'physical' | 'mental';
+
+export interface StatusEffect {
+  name: string;
+  category: StatusEffectCategory;
+  severity: number;      // -3~+3 (음수=디버프, 양수=버프)
+  modifier: number;      // 능력치 보정치에 적용되는 수치
+  duration: number;      // 자동 회복까지 남은 페이즈 수 (0=영구)
   description?: string;
 }
 
@@ -26,7 +58,7 @@ export interface CharacterData {
   // Skills and modifiers
   skills: Skill[];
   weaknesses: string[];
-  status_effects: string[];
+  status_effects: (string | StatusEffect)[];
 }
 
 export interface Character {

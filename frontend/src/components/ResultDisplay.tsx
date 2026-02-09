@@ -6,27 +6,9 @@ interface ResultDisplayProps {
   judgment: JudgmentResult;
 }
 
-/**
- * ResultDisplay - Displays the results of a completed judgment
- * 
- * This component shows:
- * - Dice roll result (1-20)
- * - Final value (dice + modifier)
- * - Success/failure outcome with appropriate colors and icons
- * - Outcome reasoning text
- * 
- * Performance optimized with React.memo and useMemo.
- * 
- * Requirements:
- * - 3.5: Display dice results with emphasis and color-coded success/failure
- * - 7.4: Show results with appropriate colors and icons
- * - 10.1: Prevent unnecessary re-renders with React.memo
- * - 10.4: Memoize computed values
- * 
- * @param props - Component props
- * @returns Result display component
- */
 function ResultDisplay({ judgment }: ResultDisplayProps) {
+  const isAutoSuccess = judgment.outcome === 'auto_success';
+
   // Memoize outcome color to avoid recalculation
   const outcomeColor = useMemo(() => {
     switch (judgment.outcome) {
@@ -38,6 +20,8 @@ function ResultDisplay({ judgment }: ResultDisplayProps) {
         return 'text-orange-600 bg-orange-50 border-orange-300';
       case 'critical_failure':
         return 'text-red-600 bg-red-50 border-red-300';
+      case 'auto_success':
+        return 'text-blue-600 bg-blue-50 border-blue-300';
       default:
         return 'text-slate-600 bg-slate-50 border-slate-300';
     }
@@ -54,6 +38,8 @@ function ResultDisplay({ judgment }: ResultDisplayProps) {
         return '❌ 실패';
       case 'critical_failure':
         return '💥  대실패!';
+      case 'auto_success':
+        return '✅ 자동 성공';
       default:
         return judgment.outcome;
     }
@@ -73,8 +59,11 @@ function ResultDisplay({ judgment }: ResultDisplayProps) {
 
   // Memoize screen reader announcement
   const outcomeAnnouncement = useMemo(() => {
+    if (isAutoSuccess) {
+      return `판정 결과: 자동 성공`;
+    }
     return `판정 결과: 주사위 ${judgment.dice_result}, 보정치 ${judgment.modifier >= 0 ? '+' : ''}${judgment.modifier}, 최종 값 ${judgment.final_value}, ${outcomeText}`;
-  }, [judgment.dice_result, judgment.modifier, judgment.final_value, outcomeText]);
+  }, [isAutoSuccess, judgment.dice_result, judgment.modifier, judgment.final_value, outcomeText]);
 
   return (
     <div className="space-y-3" role="region" aria-label="판정 결과">
@@ -83,42 +72,44 @@ function ResultDisplay({ judgment }: ResultDisplayProps) {
         {outcomeAnnouncement}
       </div>
 
-      {/* Dice Result Card */}
-      <div 
-        className="p-4 bg-white rounded-lg border-2 border-slate-200 shadow-sm"
-        role="group"
-        aria-label="주사위 굴림 결과"
-      >
-        <div className="flex items-center justify-between mb-3">
-          <span className="text-sm font-semibold text-slate-600">
-            {diceIcon} 주사위 결과
-          </span>
-          <span 
-            className="text-3xl sm:text-4xl font-bold text-slate-800"
-            aria-label={`주사위 결과: ${judgment.dice_result}`}
-          >
-            {judgment.dice_result}
-          </span>
-        </div>
-        
-        <div className="flex items-center justify-between pt-3 border-t border-slate-100">
-          <span className="text-sm font-semibold text-slate-600">최종 값</span>
-          <div className="flex items-baseline gap-2">
-            <span 
-              className="text-2xl sm:text-3xl font-bold text-blue-600"
-              aria-label={`최종 값: ${judgment.final_value}, 계산: ${judgment.dice_result} 더하기 ${judgment.modifier}`}
-            >
-              {judgment.final_value}
+      {/* Dice Result Card - hide for auto-success */}
+      {!isAutoSuccess && (
+        <div
+          className="p-4 bg-white rounded-lg border-2 border-slate-200 shadow-sm"
+          role="group"
+          aria-label="주사위 굴림 결과"
+        >
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-sm font-semibold text-slate-600">
+              {diceIcon} 주사위 결과
             </span>
-            <span className="text-xs sm:text-sm text-slate-500" aria-hidden="true">
-              ({judgment.dice_result} + {judgment.modifier})
+            <span
+              className="text-3xl sm:text-4xl font-bold text-slate-800"
+              aria-label={`주사위 결과: ${judgment.dice_result}`}
+            >
+              {judgment.dice_result}
             </span>
           </div>
+
+          <div className="flex items-center justify-between pt-3 border-t border-slate-100">
+            <span className="text-sm font-semibold text-slate-600">최종 값</span>
+            <div className="flex items-baseline gap-2">
+              <span
+                className="text-2xl sm:text-3xl font-bold text-blue-600"
+                aria-label={`최종 값: ${judgment.final_value}, 계산: ${judgment.dice_result} 더하기 ${judgment.modifier}`}
+              >
+                {judgment.final_value}
+              </span>
+              <span className="text-xs sm:text-sm text-slate-500" aria-hidden="true">
+                ({judgment.dice_result} + {judgment.modifier})
+              </span>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Outcome Card */}
-      <div 
+      <div
         className={`p-4 rounded-lg border-2 shadow-sm ${outcomeColor}`}
         role="alert"
         aria-label={`판정 결과: ${outcomeText}`}
@@ -128,7 +119,7 @@ function ResultDisplay({ judgment }: ResultDisplayProps) {
             {outcomeText}
           </span>
         </div>
-        
+
         {judgment.outcome_reasoning && (
           <div className="mt-3 pt-3 border-t border-current border-opacity-20">
             <p className="text-sm sm:text-base text-center leading-relaxed">
