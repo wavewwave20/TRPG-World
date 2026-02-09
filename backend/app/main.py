@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 
 import litellm
@@ -31,16 +32,20 @@ logging.getLogger("LiteLLM").setLevel(logging.WARNING)
 # Custom LiteLLM logger for usage tracking
 llm_logger = logging.getLogger("ai_gm.llm_usage")
 
+
 class LLMUsageLogger(CustomLogger):
     def log_pre_api_call(self, model, messages, kwargs):
         """LLM API 호출 시작 시점에 로그"""
         llm_logger.info(f"[LlmCall] 모델: {model} 호출 시작")
-    
+
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         model = kwargs.get("model")
         usage = response_obj.get("usage", {})
         cost = kwargs.get("response_cost", 0)
-        llm_logger.info(f"[LlmUsage] 모델: {model}, 토큰 사용량: {usage}, 비용: {cost}, 소요 시간: {end_time - start_time}초")
+        llm_logger.info(
+            f"[LlmUsage] 모델: {model}, 토큰 사용량: {usage}, 비용: {cost}, 소요 시간: {end_time - start_time}초"
+        )
+
 
 litellm.callbacks = [LLMUsageLogger()]
 
@@ -63,10 +68,11 @@ except ConfigurationError as e:
 
 app = FastAPI(title="TRPG World API", version="0.1.0")
 
-# CORS configuration for development
+# CORS configuration - configurable via environment variable
+cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # Vite default port
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

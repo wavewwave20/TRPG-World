@@ -1,0 +1,51 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: trpg-backend
+    expose:
+      - "8000"
+    environment:
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost,https://your-domain.com}
+      - REGISTRATION_CODE=${REGISTRATION_CODE:-test123}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4o}
+      - SYSTEM_PROMPT_PATH=app/prompts/system_prompt.md
+    volumes:
+      - backend_data:/app/data
+      - ./backend/trpg_world.db:/app/trpg_world.db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - npm_network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - VITE_API_URL=
+        - VITE_SOCKET_URL=
+    container_name: trpg-frontend
+    expose:
+      - "80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - npm_network
+
+networks:
+  # NPM의 네트워크에 연결 (이름은 NPM 설정에 따라 다를 수 있음)
+  npm_network:
+    external: true
+    name: ${NPM_NETWORK:-npm_default}
+
+volumes:
+  backend_data:
