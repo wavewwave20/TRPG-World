@@ -83,5 +83,17 @@ alembic/versions/__pycache__/
 # Kiro
 .kiro/
 
+# Claude Code
+.claude/
+
+# Serena
+.serena/
+
+# Hypothesis (pytest)
+.hypothesis/
+
 # Backups
 **/backups/
+
+# Windows artifacts
+nul
