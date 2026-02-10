@@ -1,5 +1,6 @@
 import { useState, useCallback, memo } from 'react';
 import type { JudgmentResult } from '../types/judgment';
+import { getAbilityNameKo } from '../utils/judgment';
 
 interface CompletedJudgmentsListProps {
   /** Array of completed judgments to display */
@@ -104,17 +105,7 @@ function CompletedJudgmentsList({ judgments }: CompletedJudgmentsListProps) {
     }
   };
 
-  const getAbilityName = (ability: string): string => {
-    const abilityNames: Record<string, string> = {
-      str: '근력',
-      dex: '민첩',
-      con: '건강',
-      int: '지능',
-      wis: '지혜',
-      cha: '매력'
-    };
-    return abilityNames[ability] || ability.toUpperCase();
-  };
+  const getAbilityName = getAbilityNameKo;
 
   return (
     <div className="space-y-2" role="region" aria-label="완료된 판정 목록">

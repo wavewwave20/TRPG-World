@@ -22,6 +22,7 @@ async def generate_narrative(
     world_context: str,
     story_history: list[str],
     llm_model: str = "gpt-4o",
+    act_context: str | None = None,
 ) -> str:
     """
     판정 결과를 바탕으로 스토리 서술을 생성합니다.
@@ -50,6 +51,10 @@ async def generate_narrative(
 
     # 컨텍스트 정보 구성
     context_parts = []
+
+    # 현재 막 정보
+    if act_context:
+        context_parts.append(f"## 현재 스토리 진행\n\n{act_context}")
 
     # 세계관 정보
     if world_context:

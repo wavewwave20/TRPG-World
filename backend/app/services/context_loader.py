@@ -15,8 +15,8 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from app.models import Character, GameSession, SessionParticipant, StoryLog
-from app.schemas import CharacterSheet, GameContext, StoryLogEntry
+from app.models import Character, GameSession, SessionParticipant, StoryAct, StoryLog
+from app.schemas import CharacterSheet, GameContext, StoryActInfo, StoryLogEntry
 
 logger = logging.getLogger("ai_gm.context_loader")
 
@@ -68,6 +68,9 @@ def load_game_context(db: Session, session_id: int, system_prompt: str) -> GameC
         # Load story history
         story_history = _load_story_history(db, session_id)
 
+        # Load current act info
+        current_act = _load_current_act(db, session_id)
+
         # Build game context
         game_context = GameContext(
             session_id=session_id,
@@ -76,6 +79,7 @@ def load_game_context(db: Session, session_id: int, system_prompt: str) -> GameC
             characters=characters,
             story_history=story_history,
             ai_summary=session.ai_summary,
+            current_act=current_act,
         )
 
         logger.info(f"Context loaded successfully: {len(characters)} characters, {len(story_history)} history entries")
@@ -289,3 +293,99 @@ def extract_starting_situation(world_prompt: str) -> str | None:
 
     text = world_prompt[match.end() :].strip()
     return text if text else None
+
+
+def _load_current_act(db: Session, session_id: int) -> StoryActInfo | None:
+    """현재 진행 중인 막 정보를 로드합니다.
+
+    Args:
+        db: 데이터베이스 세션
+        session_id: 게임 세션 ID
+
+    Returns:
+        StoryActInfo | None: 현재 막 정보 또는 None
+    """
+    act = (
+        db.query(StoryAct)
+        .filter(StoryAct.session_id == session_id, StoryAct.ended_at.is_(None))
+        .first()
+    )
+
+    if not act:
+        return None
+
+    return StoryActInfo(
+        id=act.id,
+        act_number=act.act_number,
+        title=act.title,
+        subtitle=act.subtitle,
+        started_at=act.started_at.isoformat(),
+    )
+
+
+def get_current_act(db: Session, session_id: int) -> StoryActInfo | None:
+    """외부에서 호출 가능한 현재 막 정보 조회.
+
+    Args:
+        db: 데이터베이스 세션
+        session_id: 게임 세션 ID
+
+    Returns:
+        StoryActInfo | None: 현재 막 정보 또는 None
+    """
+    return _load_current_act(db, session_id)
+
+
+def get_all_acts(db: Session, session_id: int) -> list[StoryActInfo]:
+    """세션의 모든 막 정보를 조회합니다.
+
+    Args:
+        db: 데이터베이스 세션
+        session_id: 게임 세션 ID
+
+    Returns:
+        list[StoryActInfo]: 모든 막 정보 목록
+    """
+    acts = (
+        db.query(StoryAct)
+        .filter(StoryAct.session_id == session_id)
+        .order_by(StoryAct.act_number)
+        .all()
+    )
+
+    return [
+        StoryActInfo(
+            id=act.id,
+            act_number=act.act_number,
+            title=act.title,
+            subtitle=act.subtitle,
+            started_at=act.started_at.isoformat(),
+        )
+        for act in acts
+    ]
+
+
+def load_act_story_history(
+    db: Session, session_id: int, act_id: int
+) -> list[StoryLogEntry]:
+    """특정 막에 속하는 스토리 로그를 로드합니다.
+
+    Args:
+        db: 데이터베이스 세션
+        session_id: 게임 세션 ID
+        act_id: 막 ID
+
+    Returns:
+        list[StoryLogEntry]: 해당 막의 스토리 로그 목록
+    """
+    logs = (
+        db.query(StoryLog)
+        .filter(StoryLog.session_id == session_id, StoryLog.act_id == act_id)
+        .order_by(StoryLog.created_at.asc())
+        .all()
+    )
+
+    return [
+        StoryLogEntry(role=log.role, content=log.content, created_at=log.created_at)
+        for log in logs
+    ]

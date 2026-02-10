@@ -109,9 +109,68 @@ class StoryLog(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     session_id = Column(Integer, ForeignKey("game_sessions.id"), nullable=False)
+    act_id = Column(Integer, ForeignKey("story_acts.id"), nullable=True)
     role = Column(String(10), nullable=False)  # "USER" 또는 "AI"
     content = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class StoryAct(Base):
+    """
+    스토리 막(Act)을 나타내는 모델.
+    AI GM이 스토리 진행 상황에 따라 자동으로 막 전환을 결정합니다.
+
+    속성:
+        id: 고유 Act 식별자
+        session_id: 이 Act가 속한 게임 세션 ID
+        act_number: 막 번호 (1부터 시작)
+        title: AI가 생성한 막 제목 (e.g., "어둠의 전조")
+        subtitle: AI가 생성한 막 부제 (e.g., "폐광산의 비밀")
+        started_at: 막 시작 시각
+        ended_at: 막 종료 시각 (NULL이면 현재 진행 중)
+        start_story_log_id: 이 막이 시작되는 StoryLog의 ID
+        end_story_log_id: 이 막이 종료되는 StoryLog의 ID
+    """
+
+    __tablename__ = "story_acts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, ForeignKey("game_sessions.id"), nullable=False)
+    act_number = Column(Integer, nullable=False)
+    title = Column(String(200), nullable=False)
+    subtitle = Column(String(200), nullable=True)
+    started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    ended_at = Column(DateTime, nullable=True)
+    start_story_log_id = Column(Integer, ForeignKey("story_logs.id"), nullable=True)
+    end_story_log_id = Column(Integer, ForeignKey("story_logs.id"), nullable=True)
+
+
+class CharacterGrowthLog(Base):
+    """
+    캐릭터 성장 기록을 나타내는 모델.
+    막 종료 시 AI가 제안한 성장 보상을 기록합니다.
+
+    속성:
+        id: 고유 성장 로그 식별자
+        session_id: 세션 ID
+        act_id: 어떤 Act의 완료로 인한 성장인지
+        character_id: 성장 대상 캐릭터
+        growth_type: 성장 유형 (ability_increase, new_skill, weakness_mitigated)
+        growth_detail: 성장 상세 내용 JSON
+        narrative_reason: AI가 생성한 성장 이유 (서사적 설명)
+        applied_at: 적용 시각
+    """
+
+    __tablename__ = "character_growth_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, ForeignKey("game_sessions.id"), nullable=False)
+    act_id = Column(Integer, ForeignKey("story_acts.id"), nullable=False)
+    character_id = Column(Integer, ForeignKey("characters.id"), nullable=False)
+    growth_type = Column(String(50), nullable=False)
+    growth_detail = Column(JSON, nullable=False)
+    narrative_reason = Column(Text, nullable=False)
+    applied_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class ActionJudgment(Base):

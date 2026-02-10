@@ -380,6 +380,44 @@ export async function login(
 }
 
 /**
+ * Story Act info structure
+ */
+export interface StoryActInfoResponse {
+  id: number;
+  act_number: number;
+  title: string;
+  subtitle: string | null;
+  started_at: string;
+}
+
+/**
+ * Get current act for a game session
+ *
+ * @param sessionId - ID of the game session
+ * @returns Promise with the current act info or null
+ */
+export async function getCurrentAct(
+  sessionId: number
+): Promise<StoryActInfoResponse | null> {
+  if (!sessionId || sessionId <= 0) {
+    throw new ApiError('Valid session ID is required', 400);
+  }
+
+  const url = `${API_BASE_URL}/api/sessions/${sessionId}/current-act`;
+
+  try {
+    return await fetchWithErrorHandling<StoryActInfoResponse>(url, {
+      method: 'GET',
+    });
+  } catch (error) {
+    if (error instanceof ApiError && error.statusCode === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+/**
  * Get character by ID
  * 
  * @param characterId - ID of the character

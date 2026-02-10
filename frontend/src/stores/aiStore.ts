@@ -1,29 +1,9 @@
 import { create } from 'zustand';
+import type { AbilityScore, JudgmentStatus, JudgmentOutcome, JudgmentSetup, JudgmentResult } from '../types/judgment';
 
-// Type definitions for judgment data
-export type AbilityScore = 'str' | 'dex' | 'con' | 'int' | 'wis' | 'cha';
-export type JudgmentStatus = 'waiting' | 'active' | 'rolling' | 'complete';
-export type Outcome = 'critical_failure' | 'failure' | 'success' | 'critical_success';
-
-export interface JudgmentSetup {
-  action_id: number;
-  character_id: number;
-  character_name: string;
-  action_text: string;
-  ability_score: AbilityScore;
-  modifier: number;
-  difficulty: number;       // DC
-  difficulty_reasoning: string;
-  status: JudgmentStatus;
-  order: number;            // Sequence order
-}
-
-export interface JudgmentResult extends JudgmentSetup {
-  dice_result: number;      // 1-20
-  final_value: number;      // dice_result + modifier
-  outcome: Outcome;
-  outcome_reasoning: string;
-}
+// types/judgment.ts에서 통합 관리, 하위 호환성을 위한 re-export
+export type { AbilityScore, JudgmentStatus, JudgmentSetup, JudgmentResult };
+export type Outcome = JudgmentOutcome;
 
 interface AIStore {
   // State

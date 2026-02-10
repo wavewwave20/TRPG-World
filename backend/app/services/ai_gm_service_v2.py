@@ -22,11 +22,14 @@ from sqlalchemy.orm import Session
 from app.models import ActionJudgment, Character, StoryLog
 from app.schemas import (
     ActionAnalysis,
+    ActTransitionResult,
     DiceResult,
+    GrowthReward,
     JudgmentOutcome,
     JudgmentResult,
     NarrativeResult,
     PlayerAction,
+    StoryActInfo,
 )
 from app.services.ai_nodes import analyze_and_judge_actions, generate_narrative, generate_narrative_streaming
 from app.services.background_task_manager import get_task_manager
@@ -208,12 +211,21 @@ class AIGMServiceV2:
             logger.debug(f"판정 계산 완료: {len(judgments)}개")
 
             # AI 노드 호출하여 서술 생성
+            # 막 컨텍스트 구성
+            act_context = None
+            if game_context.current_act:
+                act = game_context.current_act
+                act_context = f"{act.act_number}막 — {act.title}"
+                if act.subtitle:
+                    act_context += f": {act.subtitle}"
+
             narrative = await generate_narrative(
                 judgments=judgments,
                 characters=game_context.characters,
                 world_context=game_context.world_prompt,
                 story_history=game_context.story_history,
                 llm_model=self.llm_model,
+                act_context=act_context,
             )
 
             logger.debug(f"이야기 생성 완료: {len(narrative)}자")
@@ -784,3 +796,190 @@ class AIGMServiceV2:
         except Exception as e:
             logger.error(f"상태 회복 적용 실패: {e}", exc_info=True)
             self.db.rollback()
+
+    async def check_act_transition(self, session_id: int) -> ActTransitionResult | None:
+        """서술 완료 후 막 전환을 분석합니다.
+
+        전환이 필요하면:
+        1. 현재 막 종료 (ended_at 설정)
+        2. 성장 보상 생성 및 적용
+        3. 새 막 생성
+        4. ActTransitionResult 반환
+
+        전환 불필요 시 None 반환.
+
+        Args:
+            session_id: 게임 세션 ID
+
+        Returns:
+            ActTransitionResult | None
+        """
+        from app.models import StoryAct
+        from app.services.ai_nodes.act_analysis_node import (
+            analyze_act_transition,
+            generate_growth_rewards,
+        )
+        from app.services.context_loader import load_act_story_history
+
+        # 현재 막 조회
+        current_act_db = (
+            self.db.query(StoryAct)
+            .filter(StoryAct.session_id == session_id, StoryAct.ended_at.is_(None))
+            .first()
+        )
+
+        if not current_act_db:
+            logger.debug(f"세션 {session_id}: 현재 막 없음, 전환 스킵")
+            return None
+
+        current_act_info = StoryActInfo(
+            id=current_act_db.id,
+            act_number=current_act_db.act_number,
+            title=current_act_db.title,
+            subtitle=current_act_db.subtitle,
+            started_at=current_act_db.started_at.isoformat(),
+        )
+
+        # 게임 컨텍스트 로드
+        game_context = load_game_context(db=self.db, session_id=session_id, system_prompt="")
+
+        # 현재 막의 스토리 로드
+        act_story = load_act_story_history(self.db, session_id, current_act_db.id)
+
+        # AI 막 전환 분석
+        analysis = await analyze_act_transition(
+            world_context=game_context.world_prompt,
+            current_act=current_act_info,
+            story_history=act_story,
+            characters=game_context.characters,
+            llm_model=self.llm_model,
+        )
+
+        if not analysis.should_transition:
+            logger.info(
+                f"세션 {session_id}: 막 전환 불필요 "
+                f"(사건 {analysis.event_count}개, 이유: {analysis.reasoning})"
+            )
+            return None
+
+        logger.info(
+            f"세션 {session_id}: 막 전환 결정! "
+            f"'{current_act_info.title}' → '{analysis.new_act_title}'"
+        )
+
+        # 성장 보상 생성
+        growth_rewards = await generate_growth_rewards(
+            world_context=game_context.world_prompt,
+            characters=game_context.characters,
+            act_story_entries=act_story,
+            act_info=current_act_info,
+            llm_model=self.llm_model,
+        )
+
+        # 성장 보상 적용
+        for reward in growth_rewards:
+            self._apply_growth_reward(reward)
+
+        # 현재 막 종료
+        current_act_db.ended_at = datetime.utcnow()
+        # 마지막 스토리 로그 ID를 end_story_log_id로 설정
+        last_log = (
+            self.db.query(StoryLog)
+            .filter(StoryLog.session_id == session_id, StoryLog.act_id == current_act_db.id)
+            .order_by(StoryLog.created_at.desc())
+            .first()
+        )
+        if last_log:
+            current_act_db.end_story_log_id = last_log.id
+
+        # 새 막 생성
+        new_act = StoryAct(
+            session_id=session_id,
+            act_number=current_act_db.act_number + 1,
+            title=analysis.new_act_title or f"{current_act_db.act_number + 1}막",
+            subtitle=analysis.new_act_subtitle,
+            started_at=datetime.utcnow(),
+        )
+        self.db.add(new_act)
+        self.db.commit()
+        self.db.refresh(new_act)
+
+        new_act_info = StoryActInfo(
+            id=new_act.id,
+            act_number=new_act.act_number,
+            title=new_act.title,
+            subtitle=new_act.subtitle,
+            started_at=new_act.started_at.isoformat(),
+        )
+
+        completed_act_info = StoryActInfo(
+            id=current_act_db.id,
+            act_number=current_act_db.act_number,
+            title=current_act_db.title,
+            subtitle=current_act_db.subtitle,
+            started_at=current_act_db.started_at.isoformat(),
+        )
+
+        return ActTransitionResult(
+            completed_act=completed_act_info,
+            new_act=new_act_info,
+            growth_rewards=growth_rewards,
+        )
+
+    def _apply_growth_reward(self, reward: GrowthReward) -> None:
+        """성장 보상을 캐릭터 데이터에 적용합니다.
+
+        Args:
+            reward: 적용할 성장 보상
+        """
+
+        from sqlalchemy.orm.attributes import flag_modified
+
+        character = self.db.query(Character).filter(Character.id == reward.character_id).first()
+        if not character:
+            logger.warning(f"캐릭터 {reward.character_id} 찾을 수 없음, 보상 스킵")
+            return
+
+        data = character.data or {}
+
+        if reward.growth_type == "ability_increase":
+            ability = reward.growth_detail.get("ability", "")
+            delta = reward.growth_detail.get("delta", 1)
+            current = data.get(ability, 10)
+            new_value = min(current + delta, 20)  # 최대 20
+            data[ability] = new_value
+            logger.info(f"캐릭터 {character.name}: {ability} {current} → {new_value}")
+
+        elif reward.growth_type == "new_skill":
+            skill_data = reward.growth_detail.get("skill", {})
+            skills = data.get("skills", [])
+            if isinstance(skills, list):
+                skills.append(skill_data)
+                data["skills"] = skills
+            logger.info(f"캐릭터 {character.name}: 새 스킬 '{skill_data.get('name', '?')}'")
+
+        elif reward.growth_type == "weakness_mitigated":
+            weakness_name = reward.growth_detail.get("weakness", "")
+            mitigation_delta = reward.growth_detail.get("mitigation_delta", 1)
+            weaknesses = data.get("weaknesses", [])
+            updated = False
+
+            for i, w in enumerate(weaknesses):
+                if isinstance(w, str) and w == weakness_name:
+                    # string → 객체로 변환
+                    weaknesses[i] = {"name": w, "mitigation": mitigation_delta}
+                    updated = True
+                    break
+                elif isinstance(w, dict) and w.get("name") == weakness_name:
+                    w["mitigation"] = w.get("mitigation", 0) + mitigation_delta
+                    updated = True
+                    break
+
+            if updated:
+                data["weaknesses"] = weaknesses
+                logger.info(f"캐릭터 {character.name}: 약점 '{weakness_name}' 완화")
+            else:
+                logger.warning(f"캐릭터 {character.name}: 약점 '{weakness_name}' 찾을 수 없음")
+
+        character.data = data
+        flag_modified(character, "data")

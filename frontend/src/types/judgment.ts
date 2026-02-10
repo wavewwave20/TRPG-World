@@ -76,3 +76,12 @@ export interface JudgmentResult extends JudgmentSetup {
   /** AI's explanation for the outcome */
   outcome_reasoning: string;
 }
+
+/**
+ * JudgmentResult인지 확인하는 타입 가드
+ */
+export function isJudgmentResult(
+  judgment: JudgmentSetup | JudgmentResult
+): judgment is JudgmentResult {
+  return 'dice_result' in judgment;
+}

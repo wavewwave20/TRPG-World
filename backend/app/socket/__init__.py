@@ -9,10 +9,9 @@
 - utils: 유틸리티 함수
 """
 
-from app.socket.server import logger, sio
-
 # 모든 핸들러 등록
 from app.socket.handlers import register_all_handlers
+from app.socket.server import logger, sio
 
 register_all_handlers(sio)
 

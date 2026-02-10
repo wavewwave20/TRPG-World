@@ -3,6 +3,7 @@ import LeftPane from './LeftPane';
 import CenterPane from './CenterPane';
 import RightPane from './RightPane';
 import JudgmentModal from './JudgmentModal';
+import GrowthRewardModal from './GrowthRewardModal';
 import { useGameStore } from '../stores/gameStore';
 import { useAuthStore } from '../stores/authStore';
 import { useSocketStore } from '../stores/socketStore';
@@ -144,6 +145,9 @@ export default function GameLayout() {
         onClose={() => setJudgmentModalOpen(false)}
         sessionId={currentSession?.id || 0}
       />
+
+      {/* Growth Reward Modal */}
+      <GrowthRewardModal />
     </>
   );
 }

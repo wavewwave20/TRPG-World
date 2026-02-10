@@ -1,5 +1,7 @@
 import { memo, useMemo } from 'react';
 import type { JudgmentSetup, JudgmentResult } from '../types/judgment';
+import { isJudgmentResult } from '../types/judgment';
+import { computeRequiresRoll, getAbilityNameKo } from '../utils/judgment';
 import DiceRollAnimation from './DiceRollAnimation';
 import ResultDisplay from './ResultDisplay';
 import ActionButtons from './ActionButtons';
@@ -30,24 +32,12 @@ function ActiveJudgmentCard({
   onTriggerStory,
   isLastJudgment
 }: ActiveJudgmentCardProps) {
-  const isJudgmentResult = (j: JudgmentSetup | JudgmentResult): j is JudgmentResult => {
-    return 'dice_result' in j;
-  };
+  const requiresRoll = computeRequiresRoll(judgment.difficulty, judgment.requires_roll);
 
-  const requiresRoll = judgment.requires_roll ?? true;
-
-  // Memoize ability name lookup to avoid recalculation
-  const abilityName = useMemo(() => {
-    const abilityNames: Record<string, string> = {
-      str: '근력',
-      dex: '민첩',
-      con: '건강',
-      int: '지능',
-      wis: '지혜',
-      cha: '매력'
-    };
-    return abilityNames[judgment.ability_score] || judgment.ability_score.toUpperCase();
-  }, [judgment.ability_score]);
+  const abilityName = useMemo(
+    () => getAbilityNameKo(judgment.ability_score),
+    [judgment.ability_score]
+  );
 
   // Memoize character avatar initial
   const avatarInitial = useMemo(() => {

@@ -43,6 +43,11 @@ export interface StatusEffect {
   description?: string;
 }
 
+export interface Weakness {
+  name: string;
+  mitigation: number;  // 0 = 미완화, 1~2 = 부분 완화, 3+ = 극복
+}
+
 export interface CharacterData {
   inventory?: string[];
   age?: number;
@@ -57,7 +62,7 @@ export interface CharacterData {
   charisma: number;
   // Skills and modifiers
   skills: Skill[];
-  weaknesses: string[];
+  weaknesses: (string | Weakness)[];
   status_effects: (string | StatusEffect)[];
 }
 

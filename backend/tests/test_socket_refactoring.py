@@ -13,7 +13,6 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-
 # ============================================================================
 # Property 2: 한글 Docstring 포함 테스트
 # 검증 대상: 요구사항 2.3, 3.3, 4.4, 5.4, 6.3, 7.3, 8.3, 9.4, 10.3, 11.3, 13.1, 13.2, 13.4
@@ -231,12 +230,13 @@ class TestActionQueueConsistency:
         Feature: socket-server-refactoring, Property 4: 액션 큐 상태 일관성
         검증 대상: 요구사항 4.1, 4.3
         """
+        import random
+
         from app.socket.managers.action_queue_manager import (
             add_action,
             get_queue,
             reorder_actions,
         )
-        import random
 
         # 액션 추가
         action_ids = []

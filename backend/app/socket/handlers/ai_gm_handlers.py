@@ -6,10 +6,9 @@ AI GM 판정 및 이야기 생성 이벤트를 처리합니다.
 
 import asyncio
 import os
-
-from app.database import SessionLocal
 from datetime import datetime
 
+from app.database import SessionLocal
 from app.models import ActionJudgment, Character, GameSession, StoryLog
 from app.socket.managers.presence_manager import session_presence
 from app.socket.server import logger
@@ -36,24 +35,19 @@ async def _generate_opening_narrative(session_id, world_prompt, db, room_name, s
         from langchain_community.chat_models import ChatLiteLLM
         from langchain_core.prompts import ChatPromptTemplate
 
+        from app.utils.prompt_loader import load_prompt
+
         llm_model = os.getenv("LLM_MODEL", "gpt-4o")
 
-        system_message = (
-            "당신은 TRPG의 게임 마스터(GM)입니다. "
-            "세계관 설정을 바탕으로 모험의 시작 장면을 서술해주세요.\n\n"
-            "## 서술 지침\n"
-            "- 모험가들이 처음 모험을 시작하는 장면을 묘사합니다\n"
-            "- 세계관의 분위기와 톤을 반영합니다\n"
-            "- 감각적이고 몰입감 있는 묘사를 사용합니다\n"
-            "- 다음 행동으로 이어질 수 있는 상황을 설정합니다\n"
-            "- 순수한 서술 텍스트로만 응답합니다 (JSON이나 마크다운 없이)\n"
-        )
+        # narrative_prompt.md를 시스템 프롬프트로 사용
+        system_message = load_prompt("narrative_prompt.md")
 
         chat_template = ChatPromptTemplate.from_messages([
-            ("system", system_message),
+            system_message,
             ("human", "## 세계관\n\n{world_prompt}\n\n"
                       "위 세계관을 바탕으로 모험의 시작 장면을 서술해주세요. "
-                      "모험가들이 어디에 있고, 무엇을 보고 느끼는지 생생하게 묘사해주세요."),
+                      "모험가들이 어디에 있고, 무엇을 보고 느끼는지 생생하게 묘사해주세요. "
+                      "3인칭 서술자 시점으로 장면만 묘사하고, 플레이어에게 질문하지 마세요."),
         ])
 
         llm = ChatLiteLLM(
@@ -88,10 +82,16 @@ async def _generate_opening_narrative(session_id, world_prompt, db, room_name, s
         )
         db.add(story_log)
         db.commit()
+        db.refresh(story_log)
 
         await sio.emit("narrative_complete", {"session_id": session_id}, room=room_name)
 
         logger.info(f"오프닝 서술 DB 저장 완료: 세션={session_id}")
+
+        # Act 1 생성
+        await _create_act_1(
+            session_id, world_prompt, full_narrative.strip(), story_log.id, db, room_name, sio
+        )
 
     except Exception as e:
         logger.error(f"오프닝 서술 생성 에러: {e}", exc_info=True)
@@ -100,6 +100,102 @@ async def _generate_opening_narrative(session_id, world_prompt, db, room_name, s
             {"session_id": session_id, "error": f"오프닝 서술 생성 실패: {str(e)}"},
             room=room_name,
         )
+
+
+async def _create_act_1(session_id, world_prompt, narrative_text, story_log_id, db, room_name, sio):
+    """Act 1을 생성하고 act_started 이벤트를 emit합니다."""
+    from app.models import StoryAct
+
+    try:
+        from app.services.ai_nodes.act_analysis_node import generate_act_title
+
+        llm_model = os.getenv("LLM_MODEL", "gpt-4o")
+        title_data = await generate_act_title(world_prompt, narrative_text, llm_model)
+
+        act = StoryAct(
+            session_id=session_id,
+            act_number=1,
+            title=title_data.get("title", "서막"),
+            subtitle=title_data.get("subtitle"),
+            started_at=datetime.utcnow(),
+            start_story_log_id=story_log_id,
+        )
+        db.add(act)
+
+        # 오프닝 StoryLog에 act_id 설정
+        story_log = db.query(StoryLog).filter(StoryLog.id == story_log_id).first()
+        if story_log:
+            story_log.act_id = act.id
+
+        db.commit()
+        db.refresh(act)
+
+        act_info = {
+            "id": act.id,
+            "act_number": act.act_number,
+            "title": act.title,
+            "subtitle": act.subtitle,
+            "started_at": act.started_at.isoformat(),
+        }
+
+        await sio.emit(
+            "act_started",
+            {"session_id": session_id, "act": act_info},
+            room=room_name,
+        )
+
+        logger.info(f"Act 1 생성 완료: 세션={session_id}, 제목='{act.title}'")
+
+    except Exception as e:
+        logger.error(f"Act 1 생성 실패: {e}", exc_info=True)
+        # Act 생성 실패해도 게임은 계속 진행 가능
+
+
+async def _check_act_transition_after_narrative(session_id, db, room_name, sio):
+    """Phase 3 서술 완료 후 막 전환을 체크합니다."""
+    try:
+        llm_model = os.getenv("LLM_MODEL", "gpt-4o")
+
+        from app.services.ai_gm_service_v2 import AIGMServiceV2
+
+        ai_service = AIGMServiceV2(db=db, llm_model=llm_model)
+        result = await ai_service.check_act_transition(session_id)
+
+        if result is None:
+            return
+
+        # 막 전환 결과 브로드캐스트
+        await sio.emit(
+            "act_completed",
+            {
+                "session_id": session_id,
+                "completed_act": result.completed_act.model_dump(),
+                "new_act": result.new_act.model_dump(),
+                "growth_rewards": [r.model_dump() for r in result.growth_rewards],
+            },
+            room=room_name,
+        )
+
+        # 개별 캐릭터 성장 이벤트
+        for reward in result.growth_rewards:
+            await sio.emit(
+                "character_growth_applied",
+                {
+                    "session_id": session_id,
+                    "character_id": reward.character_id,
+                    "growth": reward.model_dump(),
+                },
+                room=room_name,
+            )
+
+        logger.info(
+            f"막 전환 완료: 세션={session_id}, "
+            f"'{result.completed_act.title}' → '{result.new_act.title}', "
+            f"성장 보상 {len(result.growth_rewards)}개"
+        )
+
+    except Exception as e:
+        logger.error(f"막 전환 체크 실패: {e}", exc_info=True)
 
 
 def register_handlers(sio):
@@ -243,10 +339,11 @@ def register_handlers(sio):
                         "character_id": character_id,
                         "judgment_id": action_judgment.id,
                         "action_text": action_text,
+                        "action_type": analysis.action_type.value,
                         "modifier": analysis.modifier,
                         "difficulty": analysis.difficulty,
                         "difficulty_reasoning": analysis.difficulty_reasoning,
-                        "requires_roll": analysis.requires_roll,
+                        "requires_roll": bool(analysis.requires_roll),
                     },
                     to=sid,
                 )
@@ -261,10 +358,11 @@ def register_handlers(sio):
                         "character_name": character.name,
                         "judgment_id": action_judgment.id,
                         "action_text": action_text,
+                        "action_type": analysis.action_type.value,
                         "modifier": analysis.modifier,
                         "difficulty": analysis.difficulty,
                         "difficulty_reasoning": analysis.difficulty_reasoning,
-                        "requires_roll": analysis.requires_roll,
+                        "requires_roll": bool(analysis.requires_roll),
                     },
                     room=room_name,
                     skip_sid=sid,
@@ -639,6 +737,12 @@ def register_handlers(sio):
                         },
                         room=room_name,
                     )
+
+                    # Path A: Act 1 생성
+                    await _create_act_1(
+                        session_id, session.world_prompt or "", starting_text,
+                        story_log.id, db, room_name, sio
+                    )
                 else:
                     # Path B: AI로 오프닝 서술 생성 (스트리밍)
                     await _generate_opening_narrative(
@@ -851,6 +955,9 @@ async def _trigger_story_generation_internal(session_id: int, db, room_name: str
         )
 
         logger.info(f"Phase 3 완료: 세션={session_id}, 이야기 길이={len(narrative)}")
+
+        # 막 전환 체크 (Phase 3 완료 후)
+        await _check_act_transition_after_narrative(session_id, db, room_name, sio)
 
     except Exception as e:
         logger.error(f"Phase 3 에러: {e}", exc_info=True)

@@ -133,15 +133,27 @@ export default function CharacterStatsPanel({ character }: CharacterStatsPanelPr
           <div role="group" aria-labelledby="weaknesses-heading">
             <h4 id="weaknesses-heading" className="text-xs font-semibold text-slate-500 uppercase mb-2">약점</h4>
             <div className="flex flex-wrap gap-1.5" role="list" aria-label={`약점 목록, 총 ${data.weaknesses.length}개`}>
-              {data.weaknesses.map((weakness, index) => (
-                <span
-                  key={index}
-                  className="bg-red-100 text-red-800 px-2 py-1 rounded text-xs font-medium"
-                  role="listitem"
-                >
-                  {weakness}
-                </span>
-              ))}
+              {data.weaknesses.map((weakness, index) => {
+                const name = typeof weakness === 'string' ? weakness : weakness.name;
+                const mitigation = typeof weakness === 'string' ? 0 : weakness.mitigation ?? 0;
+                const isOvercome = mitigation >= 3;
+                return (
+                  <span
+                    key={index}
+                    className={`px-2 py-1 rounded text-xs font-medium ${
+                      isOvercome
+                        ? 'bg-green-100 text-green-700 line-through'
+                        : mitigation > 0
+                          ? 'bg-orange-100 text-orange-800'
+                          : 'bg-red-100 text-red-800'
+                    }`}
+                    role="listitem"
+                    title={mitigation > 0 ? `완화: ${mitigation}/3` : undefined}
+                  >
+                    {name}{mitigation > 0 && !isOvercome && ` (${mitigation}/3)`}{isOvercome && ' (극복)'}
+                  </span>
+                );
+              })}
             </div>
           </div>
         )}

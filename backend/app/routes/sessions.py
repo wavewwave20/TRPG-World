@@ -337,3 +337,26 @@ def delete_session(session_id: int, user_id: int, db: Session = Depends(get_db))
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to delete session: {e}")
+
+
+@router.get("/{session_id}/current-act")
+def get_current_act(session_id: int, db: Session = Depends(get_db)):
+    """현재 진행 중인 막 정보를 반환합니다.
+
+    재접속 시 현재 막을 로드하기 위해 사용합니다.
+    """
+    from app.services.context_loader import get_current_act as _get_current_act
+
+    act = _get_current_act(db, session_id)
+    if not act:
+        return None
+    return act.model_dump()
+
+
+@router.get("/{session_id}/acts")
+def get_session_acts(session_id: int, db: Session = Depends(get_db)):
+    """세션의 모든 막 정보를 반환합니다."""
+    from app.services.context_loader import get_all_acts
+
+    acts = get_all_acts(db, session_id)
+    return [act.model_dump() for act in acts]

@@ -6,9 +6,11 @@ import { useStoryStore } from '../stores/storyStore';
 import { useAuthStore } from '../stores/authStore';
 import { useChatStore } from '../stores/chatStore';
 import { useAIStore } from '../stores/aiStore';
-import { getStoryLogs } from '../services/api';
+import { getStoryLogs, getCurrentAct } from '../services/api';
 // SessionCreationForm removed from in-session view
 import ModerationModal from './ModerationModal';
+import ActBanner from './ActBanner';
+import { useActStore } from '../stores/actStore';
 // import TypingText from './TypingText'; // Currently unused
 // import AIGenerationIndicator from './AIGenerationIndicator'; // REMOVED for streaming optimization
 import JudgmentResultsButton from './JudgmentResultsButton';
@@ -71,6 +73,28 @@ export default function CenterPane() {
         });
     }
   }, [currentSession, setEntries]);
+
+  // Load current act on session change
+  const setCurrentAct = useActStore((state) => state.setCurrentAct);
+  useEffect(() => {
+    if (currentSession) {
+      getCurrentAct(currentSession.id)
+        .then((act) => {
+          if (act) {
+            setCurrentAct({
+              id: act.id,
+              actNumber: act.act_number,
+              title: act.title,
+              subtitle: act.subtitle,
+              startedAt: act.started_at,
+            });
+          }
+        })
+        .catch((error) => {
+          console.error('Failed to load current act:', error);
+        });
+    }
+  }, [currentSession, setCurrentAct]);
 
   // Reload story logs when narrative streaming completes
   const skipNextScrollRef = useRef<boolean>(false);
@@ -292,6 +316,9 @@ export default function CenterPane() {
       
       {/* Session Creation Form removed from in-session view */}
       
+      {/* Act Banner */}
+      {currentSession && <ActBanner />}
+
       {/* Story Content Section */}
       <div className="flex-1 overflow-y-auto p-6 space-y-6 scroll-smooth bg-slate-50/50 relative">
         {/* AI Generation Indicator - REMOVED for streaming optimization */}

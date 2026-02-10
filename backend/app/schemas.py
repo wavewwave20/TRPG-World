@@ -209,7 +209,7 @@ class CharacterSheet(BaseModel):
 
     # 스킬과 보정치
     skills: list[dict[str, Any]] = Field(default_factory=list, description="유형, 이름, 설명이 포함된 스킬 목록")
-    weaknesses: list[str] = Field(default_factory=list)
+    weaknesses: list[str | dict[str, Any]] = Field(default_factory=list)
     status_effects: list[str | dict[str, Any]] = Field(default_factory=list)
 
 
@@ -253,3 +253,47 @@ class GameContext(BaseModel):
     characters: list[CharacterSheet]
     story_history: list[StoryLogEntry] = Field(default_factory=list, max_length=20)
     ai_summary: str | None = None
+    current_act: "StoryActInfo | None" = None
+
+
+class StoryActInfo(BaseModel):
+    """현재 막 정보 (프론트엔드 전송용)."""
+
+    id: int
+    act_number: int = Field(..., description="막 번호 (1부터)")
+    title: str = Field(..., description="AI가 생성한 막 제목")
+    subtitle: str | None = Field(None, description="AI가 생성한 막 부제")
+    started_at: str = Field(..., description="막 시작 시각 (ISO 형식)")
+
+
+class ActTransitionAnalysis(BaseModel):
+    """AI의 막 전환 분석 결과."""
+
+    identified_events: list[str] = Field(..., description="AI가 식별한 사건 목록")
+    event_count: int = Field(..., description="식별된 사건 수")
+    should_transition: bool = Field(..., description="막 전환 여부")
+    reasoning: str = Field(..., description="전환 판단 이유")
+    new_act_title: str | None = Field(None, description="새 막 제목")
+    new_act_subtitle: str | None = Field(None, description="새 막 부제")
+
+
+class GrowthReward(BaseModel):
+    """캐릭터 성장 보상."""
+
+    character_id: int
+    character_name: str
+    growth_type: str = Field(..., description="ability_increase | new_skill | weakness_mitigated")
+    growth_detail: dict[str, Any] = Field(..., description="성장 상세 (JSON)")
+    narrative_reason: str = Field(..., description="서사적 성장 이유")
+
+
+class ActTransitionResult(BaseModel):
+    """막 전환 결과 (프론트엔드 전송용)."""
+
+    completed_act: StoryActInfo
+    new_act: StoryActInfo
+    growth_rewards: list[GrowthReward]
+
+
+# Forward reference 해결
+GameContext.model_rebuild()

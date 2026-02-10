@@ -50,6 +50,9 @@ async def analyze_and_judge_actions(
     # 캐릭터 ID로 빠른 조회를 위한 맵 생성
     char_map = {char.id: char for char in characters}
 
+    # action_type 문자열 → ActionType enum 변환 맵
+    action_type_value_map = {at.value: at for at in ActionType}
+
     # 1단계: 보정치 계산
     analyses = []
     for action in player_actions:
@@ -92,11 +95,33 @@ async def analyze_and_judge_actions(
             dc_info = dc_results.get(analysis.character_id, {})
             analysis.difficulty = dc_info.get("difficulty", 15)
             analysis.difficulty_reasoning = dc_info.get("reasoning", "기본 난이도 적용")
-            analysis.requires_roll = dc_info.get("requires_roll", True)
+
+            # requires_roll을 명시적 bool로 변환
+            raw_requires_roll = dc_info.get("requires_roll", True)
+            analysis.requires_roll = bool(raw_requires_roll) if not isinstance(raw_requires_roll, str) else raw_requires_roll.lower() not in ("false", "0", "no")
+
+            # AI가 제안한 action_type으로 능력치 업데이트
+            ai_action_type_str = dc_info.get("action_type", "")
+            if ai_action_type_str and ai_action_type_str in action_type_value_map:
+                ai_action_type = action_type_value_map[ai_action_type_str]
+                if ai_action_type != analysis.action_type:
+                    character = char_map.get(analysis.character_id)
+                    if character:
+                        analysis.action_type = ai_action_type
+                        analysis.modifier = _calculate_modifier(character, ai_action_type)
+                        logger.info(
+                            f"Character {analysis.character_id}: AI가 능력치를 "
+                            f"{ai_action_type.value}로 변경, modifier={analysis.modifier:+d}"
+                        )
+
+            # difficulty <= 0이면 자동 성공 강제
+            if analysis.difficulty <= 0:
+                analysis.requires_roll = False
+                analysis.difficulty = 0
 
             if analysis.requires_roll:
-                # DC 범위 검증 (5-30)
-                analysis.difficulty = max(5, min(30, analysis.difficulty))
+                # DC 범위 검증 (2-30)
+                analysis.difficulty = max(2, min(30, analysis.difficulty))
 
                 # DC soft-cap: 캐릭터 보정치 대비 달성 불가능한 DC를 조정
                 max_reasonable_dc = analysis.modifier + 18  # d20 최대 20, 여유 -2
@@ -309,10 +334,25 @@ def _parse_dc_response(response_text: str) -> dict[int, dict[str, Any]]:
         for item in results:
             char_id = item.get("character_id")
             if char_id is not None:
+                # requires_roll을 명시적 bool로 변환 (AI가 문자열로 반환할 수 있음)
+                raw_requires_roll = item.get("requires_roll", True)
+                if isinstance(raw_requires_roll, str):
+                    requires_roll = raw_requires_roll.lower() not in ("false", "0", "no")
+                else:
+                    requires_roll = bool(raw_requires_roll)
+
+                difficulty = item.get("difficulty", 15)
+
+                # difficulty가 0 이하이면 자동 성공으로 처리
+                if difficulty <= 0:
+                    requires_roll = False
+                    difficulty = 0
+
                 dc_map[char_id] = {
-                    "difficulty": item.get("difficulty", 15),
+                    "difficulty": difficulty,
                     "reasoning": (item.get("reasoning", "") or item.get("difficulty_reasoning", "")),
-                    "requires_roll": item.get("requires_roll", True),
+                    "requires_roll": requires_roll,
+                    "action_type": item.get("action_type", ""),
                 }
 
         logger.info(f"Successfully parsed {len(dc_map)} DC results")

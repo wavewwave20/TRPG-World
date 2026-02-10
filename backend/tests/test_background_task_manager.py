@@ -12,7 +12,6 @@ import pytest
 
 from app.services.background_task_manager import BackgroundTaskManager, get_task_manager
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
