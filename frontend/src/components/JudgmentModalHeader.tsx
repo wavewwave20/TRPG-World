@@ -5,6 +5,8 @@ interface JudgmentModalHeaderProps {
   currentIndex: number;
   /** Total number of judgments */
   totalCount: number;
+  /** Whether the modal can be closed safely */
+  canClose?: boolean;
   /** Callback to close the modal */
   onClose?: () => void;
 }
@@ -36,6 +38,7 @@ interface JudgmentModalHeaderProps {
 function JudgmentModalHeader({
   currentIndex,
   totalCount,
+  canClose = true,
   onClose,
 }: JudgmentModalHeaderProps) {
   // Memoize progress percentage calculation to avoid recalculation on every render
@@ -66,9 +69,10 @@ function JudgmentModalHeader({
           {onClose && (
             <button
               onClick={onClose}
-              className="w-8 h-8 flex items-center justify-center rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-slate-800 transition-colors"
+              disabled={!canClose}
+              className="w-8 h-8 flex items-center justify-center rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-slate-800 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               aria-label="모달 닫기"
-              title="모달 닫기 (ESC)"
+              title={canClose ? "모달 닫기 (ESC)" : "모든 판정 완료 후 닫을 수 있습니다"}
             >
               ✕
             </button>

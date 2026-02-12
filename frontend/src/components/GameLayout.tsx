@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import LeftPane from './LeftPane';
 import CenterPane from './CenterPane';
 import RightPane from './RightPane';
@@ -8,6 +8,7 @@ import { useGameStore } from '../stores/gameStore';
 import { useAuthStore } from '../stores/authStore';
 import { useSocketStore } from '../stores/socketStore';
 import { useChatStore } from '../stores/chatStore';
+import { useAIStore } from '../stores/aiStore';
 
 export default function GameLayout() {
   const currentSession = useGameStore((state) => state.currentSession);
@@ -20,6 +21,38 @@ export default function GameLayout() {
   const emit = useSocketStore((state) => state.emit);
   const socket = useSocketStore((state) => state.socket);
   const clearChat = useChatStore((state) => state.clear);
+  const judgments = useAIStore((state) => state.judgments);
+  const isGenerating = useAIStore((state) => state.isGenerating);
+  const isHost = !!currentSession && currentSession.hostUserId === userId;
+  const narrativeRequestInFlightRef = useRef(false);
+
+  // Reset per session so each round can request a new narrative stream.
+  useEffect(() => {
+    narrativeRequestInFlightRef.current = false;
+  }, [currentSession?.id]);
+
+  // Keep local request guard in sync with socket lifecycle events.
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleNarrativeStreamStarted = () => {
+      narrativeRequestInFlightRef.current = true;
+      setJudgmentModalOpen(false);
+    };
+    const handleNarrativeStreamFinished = () => {
+      narrativeRequestInFlightRef.current = false;
+    };
+
+    socket.on('narrative_stream_started', handleNarrativeStreamStarted);
+    socket.on('narrative_complete', handleNarrativeStreamFinished);
+    socket.on('narrative_error', handleNarrativeStreamFinished);
+
+    return () => {
+      socket.off('narrative_stream_started', handleNarrativeStreamStarted);
+      socket.off('narrative_complete', handleNarrativeStreamFinished);
+      socket.off('narrative_error', handleNarrativeStreamFinished);
+    };
+  }, [socket, setJudgmentModalOpen]);
 
   // Session heartbeat: every 5s while inside a session page
   useEffect(() => {
@@ -122,6 +155,26 @@ export default function GameLayout() {
 
   const [activeTab, setActiveTab] = useState<'character' | 'story' | 'chat'>('story');
 
+  const handleJudgmentModalClose = () => {
+    if (currentSession) {
+      const allComplete = judgments.length > 0 && judgments.every((j) => j.status === 'complete');
+
+      // Desired UX: when the whole judgment modal closes after completion,
+      // immediately reveal the pre-generated narrative stream.
+      if (
+        allComplete &&
+        isHost &&
+        !isGenerating &&
+        !narrativeRequestInFlightRef.current
+      ) {
+        narrativeRequestInFlightRef.current = true;
+        emit('request_narrative_stream', { session_id: currentSession.id });
+      }
+    }
+
+    setJudgmentModalOpen(false);
+  };
+
   return (
     <>
       {/* Desktop: 3-column grid (unchanged) */}
@@ -205,7 +258,7 @@ export default function GameLayout() {
       {/* Judgment Modal */}
       <JudgmentModal
         isOpen={isJudgmentModalOpen}
-        onClose={() => setJudgmentModalOpen(false)}
+        onClose={handleJudgmentModalClose}
         sessionId={currentSession?.id || 0}
       />
 

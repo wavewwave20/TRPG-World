@@ -48,6 +48,11 @@ function JudgmentModal({ isOpen, onClose, sessionId }: JudgmentModalProps) {
     );
   }, [judgments]);
 
+  const handleCloseRequest = useCallback(() => {
+    if (!canClose) return;
+    onClose();
+  }, [canClose, onClose]);
+
   // Memoize computed values
   const isLastJudgment = useMemo(() => {
     return currentJudgmentIndex === judgments.length - 1;
@@ -310,7 +315,8 @@ function JudgmentModal({ isOpen, onClose, sessionId }: JudgmentModalProps) {
             <JudgmentModalHeader
               currentIndex={currentJudgmentIndex}
               totalCount={judgments.length}
-              onClose={onClose}
+              canClose={canClose}
+              onClose={handleCloseRequest}
             />
 
             <div className="p-4 sm:p-6 space-y-4">

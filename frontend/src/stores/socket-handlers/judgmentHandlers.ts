@@ -41,10 +41,16 @@ function createJudgmentSetup(
 
 /** 판정을 기존 목록에 추가 (중복 방지) */
 function addJudgmentIfNew(judgmentSetup: JudgmentSetup): void {
-  const currentJudgments = useAIStore.getState().judgments;
-  const exists = currentJudgments.some(j => j.action_id === judgmentSetup.action_id);
+  const state = useAIStore.getState();
+  const currentJudgments = state.judgments;
+  const exists = currentJudgments.some((j) => j.action_id === judgmentSetup.action_id);
   if (!exists) {
-    useAIStore.getState().setJudgmentSetups([...currentJudgments, judgmentSetup]);
+    // Keep current index stable while appending new judgments.
+    // Resetting index to 0 on every append can break multi-step progression.
+    useAIStore.setState({
+      judgments: [...currentJudgments, judgmentSetup],
+      currentJudgmentIndex: currentJudgments.length === 0 ? 0 : state.currentJudgmentIndex,
+    });
   }
 }
 
