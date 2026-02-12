@@ -6,6 +6,8 @@ services:
     container_name: trpg-backend
     expose:
       - "8000"
+    ports:
+      - "8000:8000"
     environment:
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost,https://your-domain.com}
       - REGISTRATION_CODE=${REGISTRATION_CODE:-test123}
@@ -35,6 +37,8 @@ services:
     container_name: trpg-frontend
     expose:
       - "80"
+    ports:
+      - "5173:80"
     depends_on:
       - backend
     restart: unless-stopped
