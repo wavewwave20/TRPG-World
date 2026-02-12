@@ -13,6 +13,9 @@ from app.models import ActionJudgment, Character, GameSession, StoryLog
 from app.socket.managers.presence_manager import session_presence
 from app.socket.server import logger
 
+# Guard against duplicate narrative stream requests for the same session.
+_narrative_stream_in_progress: set[int] = set()
+
 
 async def _generate_opening_narrative(session_id, world_prompt, db, room_name, sio):
     """AI로 오프닝 서술을 스트리밍 생성합니다.
@@ -32,7 +35,7 @@ async def _generate_opening_narrative(session_id, world_prompt, db, room_name, s
     await sio.emit("narrative_stream_started", {"session_id": session_id}, room=room_name)
 
     try:
-        from langchain_community.chat_models import ChatLiteLLM
+        from langchain_litellm import ChatLiteLLM
         from langchain_core.prompts import ChatPromptTemplate
 
         from app.utils.prompt_loader import load_prompt
@@ -783,6 +786,11 @@ def register_handlers(sio):
                 await sio.emit("error", {"message": "session_id가 필요합니다"}, room=sid)
                 return
 
+            if session_id in _narrative_stream_in_progress:
+                logger.info(f"중복 이야기 스트림 요청 무시: 세션={session_id}")
+                return
+
+            _narrative_stream_in_progress.add(session_id)
             logger.info(f"이야기 스트림 요청: 세션={session_id}")
 
             db = SessionLocal()
@@ -823,9 +831,13 @@ def register_handlers(sio):
                 )
             finally:
                 db.close()
+                _narrative_stream_in_progress.discard(session_id)
 
         except Exception as e:
             logger.error(f"request_narrative_stream 에러: {e}", exc_info=True)
+            session_id = data.get("session_id")
+            if session_id:
+                _narrative_stream_in_progress.discard(session_id)
             await sio.emit("error", {"message": "이야기 스트리밍 실패"}, room=sid)
 
     @sio.event

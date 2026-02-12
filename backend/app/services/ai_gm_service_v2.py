@@ -19,7 +19,7 @@ from typing import AsyncIterator
 
 from sqlalchemy.orm import Session
 
-from app.models import ActionJudgment, Character, StoryLog
+from app.models import ActionJudgment, Character, GameSession, StoryAct, StoryLog
 from app.schemas import (
     ActionAnalysis,
     ActTransitionResult,
@@ -133,6 +133,7 @@ class AIGMServiceV2:
                 world_context=game_context.world_prompt,
                 story_history=game_context.story_history,
                 llm_model=self.llm_model,
+                ai_summary=game_context.ai_summary,
             )
 
             logger.info(f"Phase 1 완료: {len(analyses)}개 행동 분석됨")
@@ -226,6 +227,7 @@ class AIGMServiceV2:
                 story_history=game_context.story_history,
                 llm_model=self.llm_model,
                 act_context=act_context,
+                ai_summary=game_context.ai_summary,
             )
 
             logger.debug(f"이야기 생성 완료: {len(narrative)}자")
@@ -382,6 +384,7 @@ class AIGMServiceV2:
                         session_id=session_id,
                         character_id=analysis.character_id,
                         action_text=analysis.action_text,
+                        action_type=analysis.action_type.value,
                         dice_result=0,
                         modifier=analysis.modifier,
                         final_value=0,
@@ -425,6 +428,7 @@ class AIGMServiceV2:
                     session_id=session_id,
                     character_id=analysis.character_id,
                     action_text=analysis.action_text,
+                    action_type=analysis.action_type.value,
                     dice_result=dice_roll,
                     modifier=analysis.modifier,
                     final_value=final_value,
@@ -491,6 +495,7 @@ class AIGMServiceV2:
                 world_context=game_context.world_prompt,
                 story_history=game_context.story_history,
                 llm_model=self.llm_model,
+                ai_summary=game_context.ai_summary,
             ):
                 # 버퍼에 토큰 추가
                 success = await buffer.add_token(token)
@@ -502,6 +507,14 @@ class AIGMServiceV2:
 
             buffer.mark_complete()
             logger.info(f"백그라운드 이야기 생성 완료: 세션={session_id}")
+
+        except asyncio.CancelledError:
+            # Timeout/cancel must leave the buffer in a terminal state.
+            # Otherwise stream_narrative() can wait forever.
+            error_msg = "이야기 생성이 취소되었습니다(타임아웃 또는 중단)."
+            logger.warning(f"백그라운드 생성 취소: 세션={session_id}")
+            buffer.mark_error(error_msg)
+            raise
 
         except Exception as e:
             error_msg = f"이야기 생성 실패: {str(e)}"
@@ -650,11 +663,18 @@ class AIGMServiceV2:
         Requirements: 8.4, 8.5
         """
         try:
+            current_act = (
+                self.db.query(StoryAct)
+                .filter(StoryAct.session_id == session_id, StoryAct.ended_at.is_(None))
+                .first()
+            )
+
             # StoryLog 생성
             story_log = StoryLog(
                 session_id=session_id,
                 role="AI",
                 content=narrative,
+                act_id=current_act.id if current_act else None,
                 created_at=datetime.utcnow(),
             )
             self.db.add(story_log)
@@ -694,11 +714,18 @@ class AIGMServiceV2:
             Exception: 데이터베이스 저장 실패 시
         """
         try:
+            current_act = (
+                self.db.query(StoryAct)
+                .filter(StoryAct.session_id == session_id, StoryAct.ended_at.is_(None))
+                .first()
+            )
+
             # 서술을 story_logs에 저장
             story_log = StoryLog(
                 session_id=session_id,
                 role="AI",
                 content=narrative,
+                act_id=current_act.id if current_act else None,
                 created_at=datetime.utcnow(),
             )
             self.db.add(story_log)
@@ -814,11 +841,11 @@ class AIGMServiceV2:
         Returns:
             ActTransitionResult | None
         """
-        from app.models import StoryAct
         from app.services.ai_nodes.act_analysis_node import (
             analyze_act_transition,
             generate_growth_rewards,
         )
+        from app.services.ai_nodes.session_summary_node import generate_updated_ai_summary
         from app.services.context_loader import load_act_story_history
 
         # 현재 막 조회
@@ -879,6 +906,21 @@ class AIGMServiceV2:
         # 성장 보상 적용
         for reward in growth_rewards:
             self._apply_growth_reward(reward)
+
+        # Act 종료 시점에만 ai_summary 갱신
+        session = self.db.query(GameSession).filter(GameSession.id == session_id).first()
+        if session:
+            try:
+                session.ai_summary = await generate_updated_ai_summary(
+                    previous_summary=session.ai_summary,
+                    completed_act=current_act_info,
+                    act_story_entries=act_story,
+                    growth_rewards=growth_rewards,
+                    llm_model=self.llm_model,
+                )
+                logger.info(f"세션 {session_id}: ai_summary 갱신 완료")
+            except Exception as e:
+                logger.error(f"세션 {session_id}: ai_summary 갱신 실패, 기존 요약 유지 ({e})", exc_info=True)
 
         # 현재 막 종료
         current_act_db.ended_at = datetime.utcnow()

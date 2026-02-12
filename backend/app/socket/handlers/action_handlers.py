@@ -6,7 +6,7 @@
 import os
 
 from app.database import SessionLocal
-from app.models import ActionJudgment, Character, SessionParticipant, StoryLog
+from app.models import ActionJudgment, Character, SessionParticipant, StoryAct, StoryLog
 from app.socket.managers.action_queue_manager import (
     add_action,
     clear_queue,
@@ -286,8 +286,19 @@ def register_handlers(sio):
                 narrative_parts = [f"{action['character_name']}: {action['action_text']}" for action in actions]
                 combined_narrative = "\n".join(narrative_parts)
 
+                current_act = (
+                    db.query(StoryAct)
+                    .filter(StoryAct.session_id == session_id, StoryAct.ended_at.is_(None))
+                    .first()
+                )
+
                 # StoryLog에 저장 (role='USER')
-                story_entry = StoryLog(session_id=session_id, role="USER", content=combined_narrative)
+                story_entry = StoryLog(
+                    session_id=session_id,
+                    role="USER",
+                    content=combined_narrative,
+                    act_id=current_act.id if current_act else None,
+                )
                 db.add(story_entry)
                 db.commit()
                 db.refresh(story_entry)
@@ -395,9 +406,11 @@ def register_handlers(sio):
                                 {
                                     "character_id": analysis.character_id,
                                     "action_text": analysis.action_text,
+                                    "action_type": analysis.action_type.value,
                                     "modifier": analysis.modifier,
                                     "difficulty": analysis.difficulty,
                                     "difficulty_reasoning": analysis.difficulty_reasoning,
+                                    "requires_roll": bool(analysis.requires_roll),
                                 }
                                 for analysis in analyses
                             ],
@@ -456,9 +469,11 @@ def register_handlers(sio):
                                         "character_id": analysis.character_id,
                                         "judgment_id": action_judgment.id,
                                         "action_text": analysis.action_text,
+                                        "action_type": analysis.action_type.value,
                                         "modifier": analysis.modifier,
                                         "difficulty": analysis.difficulty,
                                         "difficulty_reasoning": analysis.difficulty_reasoning,
+                                        "requires_roll": bool(analysis.requires_roll),
                                     },
                                     to=player_sid,
                                 )
@@ -472,9 +487,11 @@ def register_handlers(sio):
                                 "character_name": character.name,
                                 "judgment_id": action_judgment.id,
                                 "action_text": analysis.action_text,
+                                "action_type": analysis.action_type.value,
                                 "modifier": analysis.modifier,
                                 "difficulty": analysis.difficulty,
                                 "difficulty_reasoning": analysis.difficulty_reasoning,
+                                "requires_roll": bool(analysis.requires_roll),
                             },
                             room=room_name,
                             skip_sid=player_sid if participant else None,
