@@ -8,7 +8,16 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Character, GameSession, SessionParticipant, StoryLog
+from app.models import (
+    ActionJudgment,
+    Character,
+    CharacterGrowthLog,
+    DiceRollState,
+    GameSession,
+    SessionParticipant,
+    StoryAct,
+    StoryLog,
+)
 from app.socket_server import sio
 from app.utils.backups import backup_session
 from app.utils.timezone import to_kst_iso
@@ -242,9 +251,21 @@ def leave_session(session_id: int, user_id: int, db: Session = Depends(get_db)):
 class HostSessionItem(BaseModel):
     id: int
     title: str
+    world_prompt: str
     is_active: bool
     created_at: str
     participant_count: int
+    story_log_count: int
+
+
+class SessionUpdateRequest(BaseModel):
+    title: str = Field(..., min_length=1, description="Updated session title")
+    world_prompt: str = Field(..., min_length=1, description="Updated world prompt")
+
+
+class SessionDuplicateResponse(BaseModel):
+    session_id: int
+    message: str
 
 
 @router.get("/host/{host_user_id}", response_model=list[HostSessionItem])
@@ -262,9 +283,11 @@ def list_host_sessions(host_user_id: int, db: Session = Depends(get_db)):
         HostSessionItem(
             id=s.id,
             title=s.title,
+            world_prompt=s.world_prompt,
             is_active=s.is_active,
             created_at=to_kst_iso(s.created_at),
             participant_count=count,
+            story_log_count=db.query(StoryLog).filter(StoryLog.session_id == s.id).count(),
         )
         for s, count in sessions_with_counts
     ]
@@ -312,6 +335,165 @@ def restart_session(session_id: int, user_id: int, db: Session = Depends(get_db)
     return {"message": "Session restarted"}
 
 
+@router.put("/{session_id}", status_code=200)
+def update_session(
+    session_id: int,
+    payload: SessionUpdateRequest,
+    user_id: int,
+    db: Session = Depends(get_db),
+):
+    """Update an ended session's title/world prompt (host only)."""
+    session = db.query(GameSession).filter(GameSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.host_user_id != user_id:
+        raise HTTPException(status_code=403, detail="Only the host can update the session")
+    if session.is_active:
+        raise HTTPException(status_code=400, detail="End the session before updating")
+
+    title = payload.title.strip()
+    world_prompt = payload.world_prompt.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Title is required and cannot be empty")
+    if not world_prompt:
+        raise HTTPException(status_code=400, detail="World prompt is required and cannot be empty")
+
+    session.title = title
+    session.world_prompt = world_prompt
+    db.commit()
+    return {"message": "Session updated"}
+
+
+@router.post("/{session_id}/duplicate", response_model=SessionDuplicateResponse, status_code=201)
+def duplicate_session(session_id: int, user_id: int, db: Session = Depends(get_db)):
+    """Duplicate an ended session (host only), including saved story history."""
+    source = db.query(GameSession).filter(GameSession.id == session_id).first()
+    if not source:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if source.host_user_id != user_id:
+        raise HTTPException(status_code=403, detail="Only the host can duplicate the session")
+    if source.is_active:
+        raise HTTPException(status_code=400, detail="End the session before duplicating")
+
+    try:
+        # Create duplicated session in inactive state so host can manage before restart.
+        cloned = GameSession(
+            host_user_id=source.host_user_id,
+            title=f"{source.title} (복제본)",
+            world_prompt=source.world_prompt,
+            ai_summary=source.ai_summary,
+            is_active=False,
+            created_at=datetime.utcnow(),
+        )
+        db.add(cloned)
+        db.flush()
+
+        # Copy story logs and keep old->new mapping.
+        story_logs = (
+            db.query(StoryLog)
+            .filter(StoryLog.session_id == source.id)
+            .order_by(StoryLog.id.asc())
+            .all()
+        )
+        log_id_map: dict[int, int] = {}
+        cloned_log_pairs: list[tuple[StoryLog, StoryLog]] = []
+        for log in story_logs:
+            new_log = StoryLog(
+                session_id=cloned.id,
+                role=log.role,
+                content=log.content,
+                act_id=None,  # resolve after acts are duplicated
+                created_at=log.created_at,
+            )
+            db.add(new_log)
+            db.flush()
+            log_id_map[log.id] = new_log.id
+            cloned_log_pairs.append((log, new_log))
+
+        # Copy acts and keep old->new mapping.
+        acts = (
+            db.query(StoryAct)
+            .filter(StoryAct.session_id == source.id)
+            .order_by(StoryAct.id.asc())
+            .all()
+        )
+        act_id_map: dict[int, int] = {}
+        for act in acts:
+            new_act = StoryAct(
+                session_id=cloned.id,
+                act_number=act.act_number,
+                title=act.title,
+                subtitle=act.subtitle,
+                started_at=act.started_at,
+                ended_at=act.ended_at,
+                start_story_log_id=log_id_map.get(act.start_story_log_id) if act.start_story_log_id else None,
+                end_story_log_id=log_id_map.get(act.end_story_log_id) if act.end_story_log_id else None,
+            )
+            db.add(new_act)
+            db.flush()
+            act_id_map[act.id] = new_act.id
+
+        # Backfill StoryLog.act_id using duplicated act IDs.
+        for old_log, new_log in cloned_log_pairs:
+            if old_log.act_id and old_log.act_id in act_id_map:
+                new_log.act_id = act_id_map[old_log.act_id]
+
+        # Copy action judgments so prior rounds and result history stay visible.
+        judgments = (
+            db.query(ActionJudgment)
+            .filter(ActionJudgment.session_id == source.id)
+            .order_by(ActionJudgment.id.asc())
+            .all()
+        )
+        for j in judgments:
+            db.add(
+                ActionJudgment(
+                    session_id=cloned.id,
+                    character_id=j.character_id,
+                    story_log_id=log_id_map.get(j.story_log_id) if j.story_log_id else None,
+                    action_text=j.action_text,
+                    action_type=j.action_type,
+                    dice_result=j.dice_result,
+                    modifier=j.modifier,
+                    final_value=j.final_value,
+                    difficulty=j.difficulty,
+                    difficulty_reasoning=j.difficulty_reasoning,
+                    outcome=j.outcome,
+                    phase=j.phase,
+                    created_at=j.created_at,
+                )
+            )
+
+        # Copy growth logs if acts were duplicated.
+        growth_logs = (
+            db.query(CharacterGrowthLog)
+            .filter(CharacterGrowthLog.session_id == source.id)
+            .order_by(CharacterGrowthLog.id.asc())
+            .all()
+        )
+        for g in growth_logs:
+            new_act_id = act_id_map.get(g.act_id)
+            if not new_act_id:
+                continue
+            db.add(
+                CharacterGrowthLog(
+                    session_id=cloned.id,
+                    act_id=new_act_id,
+                    character_id=g.character_id,
+                    growth_type=g.growth_type,
+                    growth_detail=g.growth_detail,
+                    narrative_reason=g.narrative_reason,
+                    applied_at=g.applied_at,
+                )
+            )
+
+        db.commit()
+        return SessionDuplicateResponse(session_id=cloned.id, message="Session duplicated")
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to duplicate session: {e!s}")
+
+
 @router.delete("/{session_id}", status_code=200)
 def delete_session(session_id: int, user_id: int, db: Session = Depends(get_db)):
     """Delete a session (host only). Only allowed from host management list.
@@ -327,8 +509,16 @@ def delete_session(session_id: int, user_id: int, db: Session = Depends(get_db))
         raise HTTPException(status_code=400, detail="End the session before deleting")
 
     try:
-        # Remove related participants and story logs
+        # Remove related rows in dependency order.
         db.query(SessionParticipant).filter(SessionParticipant.session_id == session_id).delete()
+        db.query(DiceRollState).filter(DiceRollState.session_id == session_id).delete()
+        db.query(CharacterGrowthLog).filter(CharacterGrowthLog.session_id == session_id).delete()
+        db.query(ActionJudgment).filter(ActionJudgment.session_id == session_id).delete()
+        db.query(StoryLog).filter(StoryLog.session_id == session_id).update({"act_id": None})
+        db.query(StoryAct).filter(StoryAct.session_id == session_id).update(
+            {"start_story_log_id": None, "end_story_log_id": None}
+        )
+        db.query(StoryAct).filter(StoryAct.session_id == session_id).delete()
         db.query(StoryLog).filter(StoryLog.session_id == session_id).delete()
         # Remove the session
         db.delete(session)
