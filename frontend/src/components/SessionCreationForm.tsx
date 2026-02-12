@@ -148,16 +148,16 @@ export default function SessionCreationForm({ onSuccess }: SessionCreationFormPr
           />
         </div>
         
-        {/* World Prompt Input */}
+        {/* System Prompt Input */}
         <div className="space-y-1.5 flex-1">
           <label htmlFor="world-prompt" className="block text-sm font-semibold text-slate-700">
-            세계관 설정 <span className="text-red-600">*</span>
+            시스템 프롬프트 (세계관 설정) <span className="text-red-600">*</span>
           </label>
           <textarea
             id="world-prompt"
             value={worldPrompt}
             onChange={(e) => setWorldPrompt(e.target.value)}
-            placeholder="세계의 장르, 분위기, 주요 규칙을 설명해주세요..."
+            placeholder="가장 처음 적용할 세계관/규칙 지시문을 입력하세요..."
             className="w-full h-32 bg-slate-50 border border-slate-200 text-slate-900 px-4 py-3 rounded-lg text-sm focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 transition-all resize-none placeholder:text-slate-400"
             disabled={isSubmitting}
           />

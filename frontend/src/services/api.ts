@@ -95,6 +95,7 @@ export interface CreateSessionRequest {
   host_user_id: number;
   title: string;
   world_prompt: string;
+  system_prompt?: string;
 }
 
 /**
@@ -234,15 +235,21 @@ export async function createSession(
     throw new ApiError('Title is required', 400);
   }
 
-  if (!sessionData.world_prompt || sessionData.world_prompt.trim() === '') {
-    throw new ApiError('World prompt is required', 400);
+  const systemPrompt = (sessionData.system_prompt ?? sessionData.world_prompt ?? '').trim();
+  if (!systemPrompt) {
+    throw new ApiError('System prompt is required', 400);
   }
 
   const url = `${API_BASE_URL}/api/sessions/`;
+  const payload: CreateSessionRequest = {
+    ...sessionData,
+    world_prompt: systemPrompt,
+    system_prompt: systemPrompt,
+  };
   
   return fetchWithErrorHandling<CreateSessionResponse>(url, {
     method: 'POST',
-    body: JSON.stringify(sessionData),
+    body: JSON.stringify(payload),
   });
 }
 

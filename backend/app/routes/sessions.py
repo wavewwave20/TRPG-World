@@ -30,14 +30,15 @@ class SessionCreate(BaseModel):
 
     host_user_id: int = Field(..., description="ID of the user hosting the session")
     title: str = Field(..., min_length=1, description="Session title")
-    world_prompt: str = Field(..., min_length=1, description="AI system prompt for the game world")
+    world_prompt: str | None = Field(default=None, description="AI system prompt for the game world")
+    system_prompt: str | None = Field(default=None, description="Alias for world_prompt")
 
     class Config:
         json_schema_extra = {
             "example": {
                 "host_user_id": 1,
                 "title": "던전 탐험",
-                "world_prompt": "중세 판타지 세계관에서 플레이어들은 고대 던전을 탐험합니다...",
+                "system_prompt": "중세 판타지 세계관에서 플레이어들은 고대 던전을 탐험합니다...",
             }
         }
 
@@ -130,19 +131,20 @@ async def create_session(session_data: SessionCreate, db: Session = Depends(get_
 
     Requirements: 4.1, 4.2, 4.3, 4.4, 4.5
     """
-    # Validation: Check for empty title or world_prompt (Requirement 4.1)
+    # Validation: Check for empty title or system/world prompt (Requirement 4.1)
     if not session_data.title or not session_data.title.strip():
         raise HTTPException(status_code=400, detail="Title is required and cannot be empty")
 
-    if not session_data.world_prompt or not session_data.world_prompt.strip():
-        raise HTTPException(status_code=400, detail="World prompt is required and cannot be empty")
+    prompt_value = session_data.system_prompt if session_data.system_prompt is not None else session_data.world_prompt
+    if not prompt_value or not prompt_value.strip():
+        raise HTTPException(status_code=400, detail="System prompt is required and cannot be empty")
 
     try:
         # Create new session (Requirement 4.2)
         new_session = GameSession(
             host_user_id=session_data.host_user_id,
             title=session_data.title.strip(),
-            world_prompt=session_data.world_prompt.strip(),
+            world_prompt=prompt_value.strip(),
         )
 
         # Insert into database
@@ -252,6 +254,7 @@ class HostSessionItem(BaseModel):
     id: int
     title: str
     world_prompt: str
+    system_prompt: str
     is_active: bool
     created_at: str
     participant_count: int
@@ -260,7 +263,8 @@ class HostSessionItem(BaseModel):
 
 class SessionUpdateRequest(BaseModel):
     title: str = Field(..., min_length=1, description="Updated session title")
-    world_prompt: str = Field(..., min_length=1, description="Updated world prompt")
+    world_prompt: str | None = Field(default=None, description="Updated world prompt")
+    system_prompt: str | None = Field(default=None, description="Alias for world_prompt")
 
 
 class SessionDuplicateResponse(BaseModel):
@@ -284,6 +288,7 @@ def list_host_sessions(host_user_id: int, db: Session = Depends(get_db)):
             id=s.id,
             title=s.title,
             world_prompt=s.world_prompt,
+            system_prompt=s.world_prompt,
             is_active=s.is_active,
             created_at=to_kst_iso(s.created_at),
             participant_count=count,
@@ -352,11 +357,15 @@ def update_session(
         raise HTTPException(status_code=400, detail="End the session before updating")
 
     title = payload.title.strip()
-    world_prompt = payload.world_prompt.strip()
+    prompt_value = payload.system_prompt if payload.system_prompt is not None else payload.world_prompt
+    if prompt_value is None:
+        raise HTTPException(status_code=400, detail="system_prompt (or world_prompt) is required")
+
+    world_prompt = prompt_value.strip()
     if not title:
         raise HTTPException(status_code=400, detail="Title is required and cannot be empty")
     if not world_prompt:
-        raise HTTPException(status_code=400, detail="World prompt is required and cannot be empty")
+        raise HTTPException(status_code=400, detail="System prompt is required and cannot be empty")
 
     session.title = title
     session.world_prompt = world_prompt

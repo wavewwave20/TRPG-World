@@ -18,6 +18,7 @@ interface HostSessionItem {
   id: number;
   title: string;
   world_prompt: string;
+  system_prompt?: string;
   is_active: boolean;
   created_at: string;
   participant_count: number;
@@ -72,6 +73,8 @@ export default function HostSessionsManager() {
   const [storyEditContent, setStoryEditContent] = useState("");
   const [newStoryRole, setNewStoryRole] = useState<"USER" | "AI">("AI");
   const [newStoryContent, setNewStoryContent] = useState("");
+
+  const getSystemPrompt = (session: HostSessionItem) => session.system_prompt ?? session.world_prompt;
 
   const parseError = async (res: Response) => {
     const text = await res.text();
@@ -204,7 +207,7 @@ export default function HostSessionsManager() {
   const startEdit = (session: HostSessionItem) => {
     setEditingId(session.id);
     setEditTitle(session.title);
-    setEditWorldPrompt(session.world_prompt);
+    setEditWorldPrompt(getSystemPrompt(session));
     setError(null);
     setNotice(null);
   };
@@ -224,7 +227,7 @@ export default function HostSessionsManager() {
       return;
     }
     if (!trimmedPrompt) {
-      setError("월드 프롬프트를 입력하세요.");
+      setError("시스템 프롬프트를 입력하세요.");
       return;
     }
 
@@ -237,7 +240,7 @@ export default function HostSessionsManager() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title: trimmedTitle,
-          world_prompt: trimmedPrompt,
+          system_prompt: trimmedPrompt,
         }),
       });
       if (!res.ok) throw new Error(await parseError(res));
@@ -446,13 +449,13 @@ export default function HostSessionsManager() {
                       onChange={(e) => setEditWorldPrompt(e.target.value)}
                       rows={4}
                       className="w-full border border-slate-300 rounded px-3 py-2 text-sm resize-y"
-                      placeholder="월드 프롬프트"
+                      placeholder="시스템 프롬프트 (가장 처음 적용되는 지시문)"
                     />
                   </div>
                 ) : (
                   <div>
                     <h5 className="font-semibold text-slate-800">{s.title}</h5>
-                    <p className="text-xs text-slate-500 mt-1 whitespace-pre-wrap break-words line-clamp-2">{s.world_prompt}</p>
+                    <p className="text-xs text-slate-500 mt-1 whitespace-pre-wrap break-words line-clamp-2">{getSystemPrompt(s)}</p>
                   </div>
                 )}
 
@@ -516,9 +519,9 @@ export default function HostSessionsManager() {
                             : "bg-white hover:bg-slate-100 text-slate-700 border-slate-200"
                         }`}
                         disabled={s.is_active || busySessionId === s.id}
-                        title={s.is_active ? "세션을 먼저 종료하세요" : "세션 정보 수정"}
+                        title={s.is_active ? "세션을 먼저 종료하세요" : "세션 제목/시스템 프롬프트 수정"}
                       >
-                        수정
+                        세션/프롬프트 수정
                       </button>
                       <button
                         onClick={() => duplicateSession(s.id)}
