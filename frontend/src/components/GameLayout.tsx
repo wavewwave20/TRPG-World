@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import LeftPane from './LeftPane';
 import CenterPane from './CenterPane';
 import RightPane from './RightPane';
@@ -120,23 +120,86 @@ export default function GameLayout() {
     };
   }, [socket, currentSession, setJudgmentModalOpen]);
 
+  const [activeTab, setActiveTab] = useState<'character' | 'story' | 'chat'>('story');
+
   return (
     <>
-      <div className="h-full w-full grid grid-cols-12 gap-6 p-6">
+      {/* Desktop: 3-column grid (unchanged) */}
+      <div className="h-full w-full hidden lg:grid grid-cols-12 gap-6 p-6">
         {/* Left: Character Status (25%) */}
         <div className="col-span-3 bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden flex flex-col">
           <LeftPane />
         </div>
-        
+
         {/* Center: Story View (50%) */}
         <div className="col-span-6 bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden flex flex-col relative">
           <CenterPane />
         </div>
-        
+
         {/* Right: Chat (25%) */}
         <div className="col-span-3 border border-slate-200 bg-white rounded-xl shadow-sm overflow-hidden flex flex-col">
           <RightPane />
         </div>
+      </div>
+
+      {/* Mobile/Tablet: Single pane with bottom tabs */}
+      <div className="h-full w-full flex flex-col lg:hidden">
+        {/* Active pane content - all mounted, hidden/shown via CSS */}
+        <div className={`flex-1 overflow-hidden ${activeTab === 'character' ? 'flex flex-col' : 'hidden'}`}>
+          <div className="h-full bg-white overflow-hidden flex flex-col">
+            <LeftPane />
+          </div>
+        </div>
+        <div className={`flex-1 overflow-hidden ${activeTab === 'story' ? 'flex flex-col' : 'hidden'}`}>
+          <div className="h-full bg-white overflow-hidden flex flex-col relative">
+            <CenterPane />
+          </div>
+        </div>
+        <div className={`flex-1 overflow-hidden ${activeTab === 'chat' ? 'flex flex-col' : 'hidden'}`}>
+          <div className="h-full bg-white overflow-hidden flex flex-col">
+            <RightPane />
+          </div>
+        </div>
+
+        {/* Bottom Tab Bar */}
+        <nav className="flex-none h-14 bg-white border-t border-slate-200 flex items-stretch safe-area-bottom">
+          <button
+            onClick={() => setActiveTab('character')}
+            className={`flex-1 flex flex-col items-center justify-center gap-0.5 transition-colors ${
+              activeTab === 'character'
+                ? 'text-blue-600 border-t-2 border-blue-600 -mt-px'
+                : 'text-slate-400 hover:text-slate-600'
+            }`}
+            aria-current={activeTab === 'character' ? 'page' : undefined}
+          >
+            <span className="text-lg">◈</span>
+            <span className="text-[10px] font-semibold">캐릭터</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('story')}
+            className={`flex-1 flex flex-col items-center justify-center gap-0.5 transition-colors ${
+              activeTab === 'story'
+                ? 'text-blue-600 border-t-2 border-blue-600 -mt-px'
+                : 'text-slate-400 hover:text-slate-600'
+            }`}
+            aria-current={activeTab === 'story' ? 'page' : undefined}
+          >
+            <span className="text-lg">📜</span>
+            <span className="text-[10px] font-semibold">스토리</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('chat')}
+            className={`flex-1 flex flex-col items-center justify-center gap-0.5 transition-colors ${
+              activeTab === 'chat'
+                ? 'text-blue-600 border-t-2 border-blue-600 -mt-px'
+                : 'text-slate-400 hover:text-slate-600'
+            }`}
+            aria-current={activeTab === 'chat' ? 'page' : undefined}
+          >
+            <span className="text-lg">💬</span>
+            <span className="text-[10px] font-semibold">채팅</span>
+          </button>
+        </nav>
       </div>
 
       {/* Judgment Modal */}

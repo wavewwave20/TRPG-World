@@ -53,7 +53,7 @@ export default function RightPane() {
       </div>
 
       {/* System Log Section (1/3) */}
-      <div className="flex-none h-[33%] flex flex-col border-b border-slate-200">
+      <div className="flex-none h-[25%] lg:h-[33%] flex flex-col border-b border-slate-200">
         <div className="px-4 py-2 bg-slate-100 border-b border-slate-200">
           <h3 className="text-xs font-bold uppercase tracking-wide text-slate-600">시스템</h3>
         </div>
@@ -72,7 +72,7 @@ export default function RightPane() {
                   }`}
                 >
                   <div className="flex items-center justify-between mb-1">
-                    <div className={`text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded ${
+                    <div className={`text-xs lg:text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded ${
                       notification.type === 'user_joined' ? 'bg-green-100 text-green-700' :
                       notification.type === 'user_left' ? 'bg-red-100 text-red-700' :
                       notification.type === 'action_submitted' ? 'bg-purple-100 text-purple-700' :
@@ -87,11 +87,11 @@ export default function RightPane() {
                        notification.type === 'alert' ? '알림' :
                        notification.type === 'error' ? '오류' : '시스템'}
                     </div>
-                    <div className="text-[10px] text-slate-400 font-mono">
+                    <div className="text-xs lg:text-[10px] text-slate-400 font-mono">
                       {kstTime.format(notification.timestamp)}
                     </div>
                   </div>
-                  <div 
+                  <div
                     className={`text-xs leading-snug ${
                       (notification.type === 'alert' || notification.type === 'error') ? 'font-bold' : ''
                     }`}
@@ -122,10 +122,10 @@ export default function RightPane() {
               {sessionMessages.map((m, idx) => (
                 <div key={idx} className="bg-white rounded-lg p-2 border border-slate-200 shadow-sm">
                   <div className="flex items-center justify-between mb-1">
-                    <div className="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">
+                    <div className="text-xs lg:text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">
                       {m.character_name || m.username || 'Player'}
                     </div>
-                    <div className="text-[10px] text-slate-400 font-mono">
+                    <div className="text-xs lg:text-[10px] text-slate-400 font-mono">
                       {kstTime.format(m.timestamp)}
                     </div>
                   </div>
@@ -148,14 +148,14 @@ export default function RightPane() {
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && canSend) handleSend(); }}
               placeholder={currentSession ? '메시지 전송...' : '채팅하려면 세션에 참가하세요'}
-              className={`flex-1 bg-slate-50 text-slate-900 px-3 py-2 rounded-lg text-xs border border-slate-200 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all ${
+              className={`flex-1 bg-slate-50 text-slate-900 px-3 py-2.5 rounded-lg text-xs border border-slate-200 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all ${
                 !canType ? 'opacity-60 cursor-not-allowed' : ''
               }`}
               disabled={!canType}
             />
             <button
               onClick={handleSend}
-              className={`px-3 py-2 rounded-lg text-xs font-bold uppercase tracking-wide transition-all ${
+              className={`px-3 py-2.5 min-w-[44px] rounded-lg text-xs font-bold uppercase tracking-wide transition-all ${
                 canSend ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'bg-slate-200 text-slate-500 cursor-not-allowed opacity-60'
               }`}
               disabled={!canSend}

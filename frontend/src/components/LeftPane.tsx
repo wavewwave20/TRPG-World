@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { createCharacter, getCharacter, ApiError } from '../services/api';
+import { createCharacter, ApiError } from '../services/api';
 import { useGameStore } from '../stores/gameStore';
 import CharacterStatsPanel from './CharacterStatsPanel';
 
@@ -8,11 +8,9 @@ export default function LeftPane() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [loadingParticipant, setLoadingParticipant] = useState(false);
-  
+
   const currentSession = useGameStore((state) => state.currentSession);
   const currentCharacter = useGameStore((state) => state.currentCharacter);
-  const participants = useGameStore((state) => state.participants);
   const selectedParticipant = useGameStore((state) => state.selectedParticipant);
   const setCharacter = useGameStore((state) => state.setCharacter);
   const setSelectedParticipant = useGameStore((state) => state.setSelectedParticipant);
@@ -77,50 +75,6 @@ export default function LeftPane() {
     }
   };
   
-  const handleParticipantClick = async (participant: typeof participants[0]) => {
-    // If clicking the same participant, deselect
-    if (selectedParticipant?.user_id === participant.user_id) {
-      setSelectedParticipant(null);
-      return;
-    }
-    
-    // If character data is already loaded, just select
-    if (participant.character) {
-      setSelectedParticipant(participant);
-      return;
-    }
-    
-    // Load character data from backend
-    setLoadingParticipant(true);
-    try {
-      const characterData = await getCharacter(participant.character_id);
-      
-      // Update participant with character data
-      const updatedParticipant = {
-        ...participant,
-        character: {
-          id: characterData.id,
-          name: characterData.name,
-          data: characterData.data
-        }
-      };
-      
-      // Update participants list in store
-      const updatedParticipants = participants.map(p => 
-        p.user_id === participant.user_id ? updatedParticipant : p
-      );
-      useGameStore.getState().setParticipants(updatedParticipants);
-      
-      // Select the updated participant
-      setSelectedParticipant(updatedParticipant);
-    } catch (err) {
-      console.error('Failed to load participant character:', err);
-      setError('캐릭터 정보를 불러올 수 없습니다.');
-    } finally {
-      setLoadingParticipant(false);
-    }
-  };
-
   return (
     <div className="h-full flex flex-col overflow-y-auto custom-scrollbar bg-slate-50/30">
       <div className="p-4 border-b border-slate-200 bg-white sticky top-0 z-10">
@@ -148,7 +102,7 @@ export default function LeftPane() {
                   value={characterName}
                   onChange={(e) => setCharacterName(e.target.value)}
                   placeholder="예: 엘라라 문위스퍼"
-                  className="w-full bg-slate-50 text-slate-900 px-3 py-2 rounded border border-slate-200 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all placeholder:text-slate-400"
+                  className="w-full bg-slate-50 text-slate-900 px-3 py-2.5 rounded border border-slate-200 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all placeholder:text-slate-400"
                   disabled={isSubmitting || !currentSession}
                   maxLength={100}
                 />
@@ -171,7 +125,7 @@ export default function LeftPane() {
               <button
                 type="submit"
                 disabled={isSubmitting || !currentSession}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg text-sm font-semibold transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white px-3 py-2.5 rounded-lg text-sm font-semibold transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isSubmitting ? '생성 중...' : '페르소나 생성'}
               </button>
@@ -196,7 +150,7 @@ export default function LeftPane() {
                 </span>
                 <button
                   onClick={() => setSelectedParticipant(null)}
-                  className="text-blue-600 hover:text-blue-800 text-xs font-semibold"
+                  className="text-blue-600 hover:text-blue-800 text-xs font-semibold py-2 min-h-[44px] flex items-center"
                 >
                   내 캐릭터 보기
                 </button>
@@ -232,52 +186,6 @@ export default function LeftPane() {
           </>
         )}
         
-        {/* World Info Section */}
-        <div className="mt-8 pt-6 border-t border-slate-200">
-          <h3 className="text-xs font-bold text-slate-400 uppercase mb-3">현재 세계</h3>
-          {currentSession ? (
-            <div className="text-xs space-y-2 bg-slate-50 p-3 rounded-lg border border-slate-200">
-              <div className="flex justify-between items-center">
-                <span className="text-slate-500 font-medium">세션 이름</span>
-                <span className="text-slate-900 font-semibold text-right truncate max-w-[120px]">{currentSession.title}</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-slate-500 font-medium">세계 ID</span>
-                <span className="text-slate-700 font-mono bg-white px-1.5 py-0.5 rounded border border-slate-200">{currentSession.id}</span>
-              </div>
-            </div>
-          ) : (
-            <div className="text-xs text-slate-500 italic text-center p-2">
-              현재 세계에 없습니다
-            </div>
-          )}
-          
-          {/* Participants List */}
-          {currentSession && participants.length > 0 && (
-            <div className="mt-4">
-              <h4 className="text-xs font-bold text-slate-400 uppercase mb-2">참가자 ({participants.length})</h4>
-              <div className="space-y-1">
-                {participants.map((participant) => (
-                  <button
-                    key={participant.user_id}
-                    onClick={() => handleParticipantClick(participant)}
-                    disabled={loadingParticipant}
-                    className={`w-full text-left px-3 py-2 rounded-lg text-xs transition-colors ${
-                      selectedParticipant?.user_id === participant.user_id
-                        ? 'bg-blue-100 text-blue-800 font-semibold border border-blue-300'
-                        : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
-                    } ${loadingParticipant ? 'opacity-50 cursor-wait' : 'cursor-pointer'}`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="text-green-500">●</span>
-                      <span className="truncate">{participant.character_name}</span>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
       </div>
     </div>
   );

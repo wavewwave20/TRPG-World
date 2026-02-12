@@ -5,16 +5,11 @@
 
 from app.database import SessionLocal
 from app.models import Character, GameSession, SessionParticipant
-from app.socket.managers.participant_manager import (
-    get_participants,
-    remove_participant,
-)
 from app.socket.managers.presence_manager import (
     remove_presence,
     start_presence_monitor,
 )
 from app.socket.managers.session_manager import (
-    check_and_deactivate_session,
     maybe_end_session_if_host,
 )
 from app.socket.server import logger
@@ -47,76 +42,27 @@ def register_handlers(sio):
     async def disconnect(sid):
         """클라이언트 연결 해제를 처리합니다.
 
-        연결 해제 시:
-        1. presence 추적 정리
-        2. SessionParticipant 레코드 제거
-        3. user_left 이벤트 브로드캐스트
-        4. 호스트였다면 세션 종료
-        5. 세션 비활성화 확인
+        모바일 환경 고려: 즉시 참가자 제거하지 않음.
+        1. presence 추적 정리 (하트비트 모니터가 타임아웃 후 참가자 제거)
+        2. 호스트였다면 그레이스 기간 타이머 시작 (30초 후 세션 종료)
+
+        클라이언트가 재연결하면 join_session으로 다시 참가하며
+        그레이스 타이머가 취소됩니다.
 
         인자:
             sid: 소켓 세션 ID
         """
         logger.info(f"클라이언트 연결 해제: {sid}")
 
-        # presence 추적 정리
+        # presence 추적 정리 (정보만 가져오고 제거)
         info = remove_presence(sid)
 
         if info and info.get("session_id") and info.get("user_id"):
             session_id = info["session_id"]
             user_id = info["user_id"]
 
-            db = SessionLocal()
-            try:
-                # 참가자 제거 전 캐릭터 이름 조회
-                char_row = (
-                    db.query(Character.name)
-                    .join(
-                        SessionParticipant,
-                        SessionParticipant.character_id == Character.id,
-                    )
-                    .filter(
-                        SessionParticipant.session_id == session_id,
-                        SessionParticipant.user_id == user_id,
-                    )
-                    .first()
-                )
-                character_name = char_row[0] if char_row else None
-
-                # SessionParticipant 제거
-                removed = remove_participant(db, session_id, user_id)
-
-                if removed:
-                    # 업데이트된 참가자 목록 조회
-                    participants = get_participants(db, session_id)
-
-                    # user_left 이벤트 브로드캐스트
-                    room_name = f"session_{session_id}"
-                    await sio.emit(
-                        "user_left",
-                        {
-                            "user_id": user_id,
-                            "session_id": session_id,
-                            "character_name": character_name,
-                            "participants": participants,
-                            "participant_count": len(participants),
-                        },
-                        room=room_name,
-                    )
-
-                    logger.info(f"클라이언트 {sid} 세션 {session_id}에서 연결 해제, 참가자 제거됨")
-
-                # 호스트였다면 세션 종료
-                await maybe_end_session_if_host(session_id, user_id, sio)
-
-                # 세션 비활성화 확인
-                await check_and_deactivate_session(session_id, db, sio)
-
-            except Exception as e:
-                print(f"연결 해제 정리 중 에러 ({sid}): {e}")
-                db.rollback()
-            finally:
-                db.close()
+            # 호스트였다면 그레이스 기간 후 세션 종료 (즉시 종료 대신)
+            await maybe_end_session_if_host(session_id, user_id, sio)
 
     @sio.event
     async def chat_message(sid, data):

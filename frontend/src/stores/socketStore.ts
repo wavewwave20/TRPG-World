@@ -13,6 +13,7 @@ interface SocketStore {
   emit: (event: string, data: any) => void;
   on: (event: string, handler: (data: any) => void) => void;
   off: (event: string, handler?: (data: any) => void) => void;
+  reconnect: () => void;
   joinSession: (sessionId: number, userId: number, characterId: number) => void;
   leaveSession: (sessionId: number, userId: number) => void;
 }
@@ -28,8 +29,8 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
       transports: ['websocket'],
       reconnection: true,
       reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
-      reconnectionAttempts: 5,
+      reconnectionDelayMax: 10000,
+      reconnectionAttempts: Infinity,
     });
 
     // Connection lifecycle events
@@ -75,6 +76,15 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
     registerAllSocketHandlers(socket);
 
     set({ socket });
+  },
+
+  reconnect: () => {
+    const { socket } = get();
+    if (socket && !socket.connected) {
+      socket.connect();
+    } else if (!socket) {
+      get().connect();
+    }
   },
 
   disconnect: () => {

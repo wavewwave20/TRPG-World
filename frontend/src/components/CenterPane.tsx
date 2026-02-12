@@ -285,7 +285,7 @@ export default function CenterPane() {
 
   return (
     <div className="h-full flex flex-col relative z-10 bg-white">
-      <div className="flex justify-between items-center px-6 py-4 border-b border-slate-200 bg-white sticky top-0 z-20">
+      <div className="flex justify-between items-center px-3 py-3 sm:px-6 sm:py-4 border-b border-slate-200 bg-white sticky top-0 z-20">
         <h2 className="text-lg font-bold text-slate-800">
           스토리북
         </h2>
@@ -297,7 +297,7 @@ export default function CenterPane() {
             {isHost && (
               <button
                 onClick={() => setShowModerationModal(true)}
-                className="relative bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-3 py-1.5 rounded-lg text-xs font-semibold shadow-sm transition-all hover:border-slate-300"
+                className="relative bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-3 py-2.5 lg:py-1.5 rounded-lg text-xs font-semibold shadow-sm transition-all hover:border-slate-300"
               >
                 행동 결정
                 {/* Queue count badge - Show when queueCount > 0 */}
@@ -320,7 +320,7 @@ export default function CenterPane() {
       {currentSession && <ActBanner />}
 
       {/* Story Content Section */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-6 scroll-smooth bg-slate-50/50 relative">
+      <div className="flex-1 overflow-y-auto p-3 space-y-4 sm:p-6 sm:space-y-6 scroll-smooth bg-slate-50/50 relative">
         {/* AI Generation Indicator - REMOVED for streaming optimization */}
         {/* <AIGenerationIndicator isGenerating={isGenerating} /> */}
         
@@ -371,7 +371,7 @@ export default function CenterPane() {
                 return (
                   <div
                     key={entry.id}
-                    className={`flex flex-col max-w-3xl ${
+                    className={`flex flex-col max-w-full sm:max-w-3xl ${
                       entry.role === 'USER' ? 'ml-auto items-end' : 'mr-auto items-start'
                     }`}
                   >
@@ -382,7 +382,7 @@ export default function CenterPane() {
                     </div>
                     
                     <div
-                      className={`px-6 py-4 rounded-2xl shadow-sm text-sm leading-relaxed whitespace-pre-wrap max-w-full ${
+                      className={`px-4 py-3 sm:px-6 sm:py-4 rounded-2xl shadow-sm text-sm leading-relaxed whitespace-pre-wrap max-w-full ${
                         entry.role === 'USER' 
                           ? 'bg-blue-50 text-slate-800 border border-blue-100 rounded-tr-none' 
                           : 'bg-white text-slate-700 border border-slate-200 rounded-tl-none font-serif'
@@ -405,11 +405,11 @@ export default function CenterPane() {
             
             {/* Streaming Narrative - show at the bottom when narrative is being generated */}
             {currentNarrative && (
-              <div className="flex flex-col max-w-3xl mr-auto items-start">
+              <div className="flex flex-col max-w-full sm:max-w-3xl mr-auto items-start">
                 <div className="text-[10px] font-bold uppercase tracking-wider mb-1 px-1 text-slate-500">
                   던전 마스터
                 </div>
-                <div className="px-6 py-4 rounded-2xl shadow-sm text-sm leading-relaxed whitespace-pre-wrap max-w-full bg-white text-slate-700 border border-slate-200 rounded-tl-none font-serif">
+                <div className="px-4 py-3 sm:px-6 sm:py-4 rounded-2xl shadow-sm text-sm leading-relaxed whitespace-pre-wrap max-w-full bg-white text-slate-700 border border-slate-200 rounded-tl-none font-serif">
                   <span>{renderBoldText(currentNarrative)}</span>
                   {isGenerating && <span className="inline-block w-2 h-4 ml-0.5 bg-slate-400 animate-pulse align-middle" />}
                 </div>
@@ -445,7 +445,7 @@ export default function CenterPane() {
           
           <button
             onClick={handleSubmitAction}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg text-sm font-bold shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none"
+            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-3 sm:px-6 rounded-lg text-sm font-bold shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none"
             disabled={actionInputDisabled || !actionText.trim() || !currentSession || !currentCharacter}
           >
             행동

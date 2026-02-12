@@ -9,6 +9,7 @@ import SessionList from './components/SessionList';
 import HostSessionsManager from './components/HostSessionsManager';
 import LoginForm from './components/LoginForm';
 import CharacterManagement from './components/CharacterManagement';
+import SessionInfoDropdown from './components/SessionInfoDropdown';
 import type { Character as BaseCharacter } from './types/character';
 import './App.css'
 
@@ -20,7 +21,7 @@ interface Character extends BaseCharacter {
 }
 
 function App() {
-  const { connect, disconnect, connected, error } = useSocketStore();
+  const { connect, disconnect, reconnect, connected, error } = useSocketStore();
   const currentSession = useGameStore((state) => state.currentSession);
   const setCharacter = useGameStore((state) => state.setCharacter);
   const setSession = useGameStore((state) => state.setSession);
@@ -80,6 +81,22 @@ function App() {
     setCharacter(null);
   };
 
+  const handleEndSession = async () => {
+    if (!currentSession || !userId) return;
+    if (!confirm('정말로 세션을 종료하시겠습니까? 모든 참가자가 나가게 됩니다.')) return;
+    try {
+      await fetch(`${API_BASE_URL}/api/sessions/${currentSession.id}/end?user_id=${userId}`, { method: 'POST' });
+    } catch (e) {
+      console.warn('Failed to end session:', e);
+    }
+    clearChat();
+    clearNotifications();
+    setSession(null);
+    setShowLobby(true);
+  };
+
+  const isHost = currentSession?.hostUserId === userId;
+
   const handleSelectCharacter = (character: Character) => {
     setSelectedCharacter(character);
     setCharacter({
@@ -110,7 +127,7 @@ function App() {
             {!showLobby ? (
               <button
                 onClick={handleBackToLobby}
-                className="group flex items-center justify-center w-8 h-8 rounded-full hover:bg-slate-100 text-slate-500 hover:text-blue-600 transition-all border border-transparent hover:border-slate-200"
+                className="group flex items-center justify-center w-10 h-10 lg:w-8 lg:h-8 rounded-full hover:bg-slate-100 text-slate-500 hover:text-blue-600 transition-all border border-transparent hover:border-slate-200"
                 title="로비로 돌아가기"
               >
                 <span className="text-lg group-hover:-translate-x-0.5 transition-transform">←</span>
@@ -118,7 +135,7 @@ function App() {
             ) : (
               <button
                 onClick={handleBackToCharacterSelect}
-                className="group flex items-center justify-center w-8 h-8 rounded-full hover:bg-slate-100 text-slate-500 hover:text-blue-600 transition-all border border-transparent hover:border-slate-200"
+                className="group flex items-center justify-center w-10 h-10 lg:w-8 lg:h-8 rounded-full hover:bg-slate-100 text-slate-500 hover:text-blue-600 transition-all border border-transparent hover:border-slate-200"
                 title="캐릭터 선택으로 돌아가기"
               >
                 <span className="text-lg group-hover:-translate-x-0.5 transition-transform">←</span>
@@ -136,37 +153,56 @@ function App() {
             </div>
           </div>
 
-          {/* Connection Status Pill */}
-          <div className={`px-4 py-2 rounded-lg flex items-center gap-2.5 text-sm font-semibold transition-all whitespace-nowrap shadow-sm border ${
-            connected 
-              ? 'bg-green-50 text-green-700 border-green-200' 
-              : error 
-              ? 'bg-red-50 text-red-700 border-red-200' 
-              : 'bg-yellow-50 text-yellow-700 border-yellow-200'
-          }`}>
-            <div className={`w-2.5 h-2.5 rounded-full ${
-              connected ? 'bg-green-500' : error ? 'bg-red-500' : 'bg-yellow-500'
-            } ${connected ? 'animate-pulse' : ''}`} />
-            <span className="hidden sm:inline">
-              {connected ? '시스템 온라인' : error ? '연결 오류' : '연결 중...'}
-            </span>
-            {/* Mobile-only concise status */}
-            <span className="inline sm:hidden uppercase text-xs font-bold">
-              {connected ? '온라인' : error ? '오류' : '...'}
-            </span>
+          <div className="flex items-center gap-2">
+            {/* Session Info Dropdown - Only in game view */}
+            {!showLobby && currentSession && <SessionInfoDropdown />}
+
+            {/* Host End Session Button - Only in game view for host */}
+            {!showLobby && isHost && (
+              <button
+                onClick={handleEndSession}
+                className="px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 transition-all whitespace-nowrap"
+              >
+                <span className="hidden sm:inline">방 종료</span>
+                <span className="inline sm:hidden">종료</span>
+              </button>
+            )}
+
+            {/* Connection Status Pill */}
+            <div className={`px-3 sm:px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold transition-all whitespace-nowrap shadow-sm border ${
+              connected
+                ? 'bg-green-50 text-green-700 border-green-200'
+                : error
+                ? 'bg-red-50 text-red-700 border-red-200'
+                : 'bg-yellow-50 text-yellow-700 border-yellow-200'
+            }`}>
+              <div className={`w-2.5 h-2.5 rounded-full ${
+                connected ? 'bg-green-500' : error ? 'bg-red-500' : 'bg-yellow-500'
+              } ${connected ? 'animate-pulse' : ''}`} />
+              <span className="hidden sm:inline">
+                {connected ? '시스템 온라인' : error ? '연결 오류' : '연결 중...'}
+              </span>
+              <span className="inline sm:hidden uppercase text-xs font-bold">
+                {connected ? '온라인' : error ? '오류' : '...'}
+              </span>
+            </div>
           </div>
         </div>
       </header>
 
       {/* Main Content Area */}
       <main className="flex-1 relative w-full overflow-hidden bg-slate-50">
-        {error && (
-          <div className="absolute top-6 left-1/2 -translate-x-1/2 w-[95%] max-w-7xl px-4 py-2 bg-red-50 text-red-700 border border-red-200 rounded-lg text-sm shadow-sm flex items-start gap-3 animate-fade-in-down z-40">
-             <span className="text-lg">⚠️</span>
-             <div className="flex-1">
-               <p className="font-semibold">연결 오류</p>
-               <p>{error}</p>
-             </div>
+        {/* Disconnection Banner with Reconnect Button */}
+        {!connected && isAuthenticated && (
+          <div className="absolute top-0 left-0 right-0 px-4 py-2.5 bg-yellow-50 text-yellow-800 border-b border-yellow-200 text-sm flex items-center justify-center gap-3 z-40">
+            <div className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse" />
+            <span className="font-medium">서버와 연결이 끊어졌습니다. 재연결 중...</span>
+            <button
+              onClick={reconnect}
+              className="px-3 py-1.5 bg-yellow-600 hover:bg-yellow-700 text-white text-xs font-bold rounded-lg transition-colors"
+            >
+              재접속
+            </button>
           </div>
         )}
         
@@ -202,8 +238,8 @@ function App() {
             </div>
           </div>
         ) : (
-          <div className="h-full w-full flex items-center justify-center p-6">
-            <div className="w-[95%] max-w-7xl h-full border border-slate-200 bg-white rounded-xl shadow-sm overflow-hidden">
+          <div className="h-full w-full flex items-center justify-center p-0 lg:p-6">
+            <div className="w-full lg:w-[95%] lg:max-w-7xl h-full lg:border lg:border-slate-200 bg-white lg:rounded-xl lg:shadow-sm overflow-hidden">
               <GameLayout />
             </div>
           </div>

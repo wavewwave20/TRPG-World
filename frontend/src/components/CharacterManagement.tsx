@@ -274,7 +274,7 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 p-8">
+    <div className="min-h-screen bg-slate-50 p-4 sm:p-8">
       <div className="max-w-4xl mx-auto">
         {/* Header */}
         <div className="flex justify-between items-center mb-8">
@@ -300,7 +300,7 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
               {/* 기본 정보 */}
               <div className="space-y-4">
                 <h3 className="text-lg font-semibold text-slate-700 border-b pb-2">기본 정보</h3>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-2">이름 *</label>
                     <input
@@ -348,7 +348,7 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
               <div className="space-y-4">
                 <h3 className="text-lg font-semibold text-slate-700 border-b pb-2">능력치 (D20 시스템)</h3>
                 <p className="text-xs text-slate-500">10 = 평균, 14-15 = 전문가, 18+ = 천재</p>
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-2">
                       근력 (STR) <span className="text-xs text-slate-500">({calculateModifier(strength) >= 0 ? '+' : ''}{calculateModifier(strength)})</span>
@@ -434,7 +434,7 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
               <div className="space-y-4">
                 <h3 className="text-lg font-semibold text-slate-700 border-b pb-2">스킬</h3>
                 <div className="space-y-3 bg-slate-50 p-4 rounded-lg">
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
                       <label className="block text-xs font-medium text-slate-600 mb-1">타입</label>
                       <select
@@ -619,22 +619,22 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
                       <p className="text-sm text-slate-600 mt-1 italic">{character.data.concept}</p>
                     )}
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2">
                     <button
                       onClick={() => onSelectCharacter(character)}
-                      className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors text-sm font-medium shadow-sm"
+                      className="bg-green-600 hover:bg-green-700 text-white px-4 py-2.5 rounded-lg transition-colors text-sm font-medium shadow-sm"
                     >
                       선택
                     </button>
                     <button
                       onClick={() => startEdit(character)}
-                      className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors text-sm font-medium shadow-sm"
+                      className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-lg transition-colors text-sm font-medium shadow-sm"
                     >
                       수정
                     </button>
                     <button
                       onClick={() => handleDelete(character.id)}
-                      className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg transition-colors text-sm font-medium shadow-sm"
+                      className="bg-red-600 hover:bg-red-700 text-white px-4 py-2.5 rounded-lg transition-colors text-sm font-medium shadow-sm"
                     >
                       삭제
                     </button>
@@ -642,7 +642,7 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
                 </div>
                 
                 {/* 능력치 */}
-                <div className="grid grid-cols-6 gap-2 text-sm text-slate-700 bg-slate-50 p-3 rounded-lg">
+                <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-sm text-slate-700 bg-slate-50 p-3 rounded-lg">
                   <div className="text-center">
                     <div className="text-xs text-slate-500">STR</div>
                     <div className="font-bold">{character.data.strength || 10}</div>

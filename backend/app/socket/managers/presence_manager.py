@@ -17,8 +17,8 @@ session_presence: dict[str, dict] = {}
 
 # 하트비트 설정
 HEARTBEAT_INTERVAL_SEC = 5
-# 1회 누락 허용 => 2회 누락 후 연결 해제
-HEARTBEAT_TIMEOUT_SEC = HEARTBEAT_INTERVAL_SEC * 2 + 0.5  # 약간의 버퍼
+# 모바일 환경 고려: 3회 누락 허용 => 4회 누락 후 연결 해제
+HEARTBEAT_TIMEOUT_SEC = HEARTBEAT_INTERVAL_SEC * 4 + 0.5  # ~20.5초 (모바일 화면 꺼짐 대응)
 
 # 백그라운드 태스크 상태
 _presence_task_started = False

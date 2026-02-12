@@ -12,7 +12,10 @@ from app.socket.managers.participant_manager import (
     remove_participant,
 )
 from app.socket.managers.presence_manager import remove_presence, update_presence
-from app.socket.managers.session_manager import check_and_deactivate_session
+from app.socket.managers.session_manager import (
+    cancel_host_grace_timer,
+    check_and_deactivate_session,
+)
 from app.socket.server import logger
 
 
@@ -67,6 +70,10 @@ def register_handlers(sio):
                 if not session.is_active:
                     await sio.emit("error", {"message": "세션이 종료되었습니다."}, room=sid)
                     return
+
+                # 호스트 재연결 시 그레이스 타이머 취소
+                if session.host_user_id == user_id:
+                    cancel_host_grace_timer(session_id)
 
                 # 참가자 추가 (SessionParticipant 레코드 생성/업데이트)
                 add_participant(db, session_id, user_id, character_id)
