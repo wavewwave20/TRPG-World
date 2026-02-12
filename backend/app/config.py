@@ -91,44 +91,9 @@ class AIGMConfig:
         elif self.openai_api_key == "your_openai_api_key_here":
             errors.append("OPENAI_API_KEY is set to placeholder value.\n  Please provide a valid OpenAI API key")
 
-        # Validate SYSTEM_PROMPT_PATH (requirement 8.1, 8.2, 11.3)
+        # SYSTEM_PROMPT_PATH is legacy - individual prompt files are used instead
+        # (judgment_prompt.md, narrative_prompt.md, etc.)
         self.system_prompt_path = os.getenv("SYSTEM_PROMPT_PATH", self.DEFAULT_SYSTEM_PROMPT_PATH)
-
-        # Convert to absolute path if relative
-        if not os.path.isabs(self.system_prompt_path):
-            # Assume path is relative to backend directory
-            backend_dir = Path(__file__).parent.parent
-            prompt_path = backend_dir / self.system_prompt_path
-        else:
-            prompt_path = Path(self.system_prompt_path)
-
-        # Requirement 8.2: Clear error when file is missing
-        if not prompt_path.exists():
-            errors.append(
-                f"System prompt file not found at: {prompt_path}\n"
-                f"  SYSTEM_PROMPT_PATH={self.system_prompt_path}\n"
-                f"  Please create the system prompt markdown file at the specified path"
-            )
-        elif not prompt_path.is_file():
-            errors.append(f"System prompt path exists but is not a file: {prompt_path}")
-        else:
-            # Requirement 11.3: Verify file is readable and not empty
-            try:
-                content = prompt_path.read_text(encoding="utf-8")
-                if not content.strip():
-                    errors.append(
-                        f"System prompt file is empty: {prompt_path}\n"
-                        f"  The system prompt file must contain TRPG rules and guidelines"
-                    )
-            except UnicodeDecodeError as e:
-                errors.append(
-                    f"System prompt file has invalid encoding at {prompt_path}\n"
-                    f"  Please ensure the file is UTF-8 encoded: {e}"
-                )
-            except PermissionError as e:
-                errors.append(f"Cannot read system prompt file (permission denied) at {prompt_path}: {e}")
-            except Exception as e:
-                errors.append(f"Cannot read system prompt file at {prompt_path}: {e}")
 
         # Log warnings
         for warning in warnings:

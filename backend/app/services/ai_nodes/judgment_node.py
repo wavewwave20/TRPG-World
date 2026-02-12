@@ -18,12 +18,39 @@ from app.utils.prompt_loader import load_prompt
 logger = logging.getLogger("ai_gm.judgment_node")
 
 
+def _select_recent_story_entries(story_history: list, limit: int = 5) -> list:
+    """스토리 히스토리에서 최신 항목 limit개를 반환합니다."""
+    if not story_history:
+        return []
+
+    entries = list(story_history)
+
+    if all(hasattr(entry, "created_at") for entry in entries):
+        entries.sort(key=lambda entry: (getattr(entry, "created_at") is None, getattr(entry, "created_at")))
+
+    return entries[-limit:]
+
+
+def _format_story_entry(entry: object) -> str:
+    """스토리 항목을 프롬프트용 텍스트로 변환합니다."""
+    if hasattr(entry, "role") and hasattr(entry, "content"):
+        role = getattr(entry, "role", "") or "NARRATION"
+        content = getattr(entry, "content", "") or ""
+        return f"[{role}] {content}"
+
+    if hasattr(entry, "content"):
+        return str(getattr(entry, "content"))
+
+    return str(entry)
+
+
 async def analyze_and_judge_actions(
     player_actions: list[PlayerAction],
     characters: list[CharacterSheet],
     world_context: str,
     story_history: list[str],
     llm_model: str = "gemini/gemini-3-pro-preview",
+    ai_summary: str | None = None,
 ) -> list[ActionAnalysis]:
     """
     플레이어 행동을 분석하고 보정치와 난이도를 결정합니다.
@@ -88,6 +115,7 @@ async def analyze_and_judge_actions(
             world_context=world_context,
             story_history=story_history,
             llm_model=llm_model,
+            ai_summary=ai_summary,
         )
 
         # 분석 결과에 DC 적용
@@ -188,6 +216,7 @@ async def _determine_difficulty_with_ai(
     world_context: str,
     story_history: list[str],
     llm_model: str,
+    ai_summary: str | None = None,
 ) -> dict[int, dict[str, Any]]:
     """
     AI를 사용하여 각 행동의 난이도(DC)를 결정합니다.
@@ -218,6 +247,10 @@ async def _determine_difficulty_with_ai(
     if world_context:
         context_parts.append(f"## 세계관\n\n{world_context}")
 
+    # 장기 요약 (Act 종료 시점에만 갱신되는 누적 요약)
+    if ai_summary:
+        context_parts.append(f"## 장기 요약\n\n{ai_summary}")
+
     # 캐릭터 정보
     char_info_list = []
     for char in characters:
@@ -230,17 +263,9 @@ async def _determine_difficulty_with_ai(
     context_parts.append("## 캐릭터 정보\n\n" + "\n".join(char_info_list))
 
     # 스토리 히스토리 (최근 5개만)
-    if story_history:
-        recent_history = story_history[-5:]
-        # StoryLogEntry 객체를 문자열로 변환
-        history_texts = []
-        for entry in recent_history:
-            if hasattr(entry, "content") and entry.content:
-                history_texts.append(str(entry.content))
-            elif isinstance(entry, str):
-                history_texts.append(entry)
-            elif entry is not None:
-                history_texts.append(str(entry))
+    recent_history = _select_recent_story_entries(story_history, limit=5)
+    if recent_history:
+        history_texts = [_format_story_entry(entry) for entry in recent_history if entry is not None]
         if history_texts:
             history_text = "\n\n".join(history_texts)
             context_parts.append(f"## 최근 스토리\n\n{history_text}")

@@ -3,7 +3,7 @@
 import json
 import logging
 
-from langchain_community.chat_models import ChatLiteLLM
+from langchain_litellm import ChatLiteLLM
 from langchain_core.prompts import ChatPromptTemplate
 
 from app.schemas import (

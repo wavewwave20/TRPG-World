@@ -16,6 +16,36 @@ from app.utils.prompt_loader import load_prompt
 logger = logging.getLogger("ai_gm.narrative_node")
 
 
+def _select_recent_story_entries(story_history: list, limit: int = 5) -> list:
+    """스토리 히스토리에서 최신 항목 limit개를 반환합니다.
+
+    story_history가 created_at을 가진 객체 목록이면 시간순(오래된 -> 최신)으로
+    정렬한 뒤 최신 limit개를 선택합니다.
+    """
+    if not story_history:
+        return []
+
+    entries = list(story_history)
+
+    if all(hasattr(entry, "created_at") for entry in entries):
+        entries.sort(key=lambda entry: (getattr(entry, "created_at") is None, getattr(entry, "created_at")))
+
+    return entries[-limit:]
+
+
+def _format_story_entry(entry: object) -> str:
+    """스토리 항목을 프롬프트용 텍스트로 변환합니다."""
+    if hasattr(entry, "role") and hasattr(entry, "content"):
+        role = getattr(entry, "role", "") or "NARRATION"
+        content = getattr(entry, "content", "") or ""
+        return f"[{role}] {content}"
+
+    if hasattr(entry, "content"):
+        return str(getattr(entry, "content"))
+
+    return str(entry)
+
+
 async def generate_narrative(
     judgments: list[JudgmentResult],
     characters: list[CharacterSheet],
@@ -23,6 +53,7 @@ async def generate_narrative(
     story_history: list[str],
     llm_model: str = "gpt-4o",
     act_context: str | None = None,
+    ai_summary: str | None = None,
 ) -> str:
     """
     판정 결과를 바탕으로 스토리 서술을 생성합니다.
@@ -60,6 +91,10 @@ async def generate_narrative(
     if world_context:
         context_parts.append(f"## 세계관\n\n{world_context}")
 
+    # 장기 요약 (Act 종료 시점에만 갱신되는 누적 요약)
+    if ai_summary:
+        context_parts.append(f"## 장기 요약\n\n{ai_summary}")
+
     # 캐릭터 정보
     char_map = {char.id: char for char in characters}
     char_info_list = []
@@ -73,16 +108,9 @@ async def generate_narrative(
     context_parts.append("## 캐릭터 정보\n\n" + "\n".join(char_info_list))
 
     # 스토리 히스토리 (최근 5개만)
-    if story_history:
-        recent_history = story_history[-5:]
-        # StoryLogEntry 객체를 문자열로 변환
-        history_texts = []
-        for entry in recent_history:
-            if hasattr(entry, "content"):
-                history_texts.append(entry.content)
-            else:
-                history_texts.append(str(entry))
-        history_text = "\n\n".join(history_texts)
+    recent_history = _select_recent_story_entries(story_history, limit=5)
+    if recent_history:
+        history_text = "\n\n".join(_format_story_entry(entry) for entry in recent_history)
         context_parts.append(f"## 최근 스토리\n\n{history_text}")
 
     # 판정 결과
@@ -170,6 +198,7 @@ async def generate_narrative_streaming(
     world_context: str,
     story_history: list[str],
     llm_model: str = "gemini/gemini-3-pro-preview",
+    ai_summary: str | None = None,
 ) -> AsyncIterator[str]:
     """
     판정 결과를 바탕으로 스토리 서술을 스트리밍으로 생성합니다.
@@ -204,6 +233,10 @@ async def generate_narrative_streaming(
     if world_context:
         context_parts.append(f"## 세계관\n\n{world_context}")
 
+    # 장기 요약 (Act 종료 시점에만 갱신되는 누적 요약)
+    if ai_summary:
+        context_parts.append(f"## 장기 요약\n\n{ai_summary}")
+
     # 캐릭터 정보
     char_map = {char.id: char for char in characters}
     char_info_list = []
@@ -217,15 +250,9 @@ async def generate_narrative_streaming(
     context_parts.append("## 캐릭터 정보\n\n" + "\n".join(char_info_list))
 
     # 스토리 히스토리 (최근 5개만)
-    if story_history:
-        recent_history = story_history[-5:]
-        history_texts = []
-        for entry in recent_history:
-            if hasattr(entry, "content"):
-                history_texts.append(entry.content)
-            else:
-                history_texts.append(str(entry))
-        history_text = "\n\n".join(history_texts)
+    recent_history = _select_recent_story_entries(story_history, limit=5)
+    if recent_history:
+        history_text = "\n\n".join(_format_story_entry(entry) for entry in recent_history)
         context_parts.append(f"## 최근 스토리\n\n{history_text}")
 
     # 판정 결과
