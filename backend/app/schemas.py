@@ -160,6 +160,7 @@ class NarrativeResult(BaseModel):
     full_narrative: str = Field(default="", description="완전히 생성된 서술 텍스트")
     narrative_stream: AsyncIterator[str] | None = Field(None, exclude=True)
     is_complete: bool = Field(default=False, description="서술 생성 완료 여부")
+    narrative_metadata: dict | None = Field(default=None, description="서술 메타데이터 (막 전환 판단 등)")
 
 
 class StatusEffectCategory(str, Enum):
@@ -243,7 +244,7 @@ class GameContext(BaseModel):
         world_prompt: 세계관 설정 및 규칙
         system_prompt: 마크다운 파일의 TRPG 시스템 규칙
         characters: 세션의 모든 캐릭터
-        story_history: 최근 스토리 로그 (최대 20개)
+        story_history: 최근 스토리 로그
         ai_summary: 긴 세션을 위한 선택적 압축 컨텍스트
     """
 
@@ -251,7 +252,7 @@ class GameContext(BaseModel):
     world_prompt: str
     system_prompt: str
     characters: list[CharacterSheet]
-    story_history: list[StoryLogEntry] = Field(default_factory=list, max_length=20)
+    story_history: list[StoryLogEntry] = Field(default_factory=list)
     ai_summary: str | None = None
     current_act: "StoryActInfo | None" = None
 

@@ -1,8 +1,14 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { useGameStore } from '../stores/gameStore';
 import { useSocketStore } from '../stores/socketStore';
 import { useChatStore } from '../stores/chatStore';
 import { useAuthStore } from '../stores/authStore';
+
+const KST_TIME_FORMATTER = new Intl.DateTimeFormat('ko-KR', {
+  timeZone: 'Asia/Seoul',
+  hour: '2-digit',
+  minute: '2-digit',
+});
 
 export default function RightPane() {
   const [text, setText] = useState('');
@@ -18,12 +24,15 @@ export default function RightPane() {
 
   const canSend = connected && !!currentSession && !!userId && text.trim().length > 0;
   const canType = connected && !!currentSession && !!userId;
-  const kstTime = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit' });
+  const sessionMessages = useMemo(
+    () => (currentSession ? messages.filter(m => m.session_id === currentSession.id) : messages),
+    [messages, currentSession]
+  );
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
     generalEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [sessionMessages]);
 
   // Auto-scroll to bottom when new notifications arrive
   useEffect(() => {
@@ -39,9 +48,6 @@ export default function RightPane() {
     });
     setText('');
   };
-
-  // Filter general chat by current session
-  const sessionMessages = currentSession ? messages.filter(m => m.session_id === currentSession.id) : messages;
 
   return (
     <div className="h-full flex flex-col bg-white">
@@ -88,7 +94,7 @@ export default function RightPane() {
                        notification.type === 'error' ? '오류' : '시스템'}
                     </div>
                     <div className="text-xs lg:text-[10px] text-slate-400 font-mono">
-                      {kstTime.format(notification.timestamp)}
+                      {KST_TIME_FORMATTER.format(notification.timestamp)}
                     </div>
                   </div>
                   <div
@@ -119,14 +125,14 @@ export default function RightPane() {
             </div>
           ) : (
             <>
-              {sessionMessages.map((m, idx) => (
-                <div key={idx} className="bg-white rounded-lg p-2 border border-slate-200 shadow-sm">
+              {sessionMessages.map((m) => (
+                <div key={m.id} className="bg-white rounded-lg p-2 border border-slate-200 shadow-sm">
                   <div className="flex items-center justify-between mb-1">
                     <div className="text-xs lg:text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">
                       {m.character_name || m.username || 'Player'}
                     </div>
                     <div className="text-xs lg:text-[10px] text-slate-400 font-mono">
-                      {kstTime.format(m.timestamp)}
+                      {KST_TIME_FORMATTER.format(m.timestamp)}
                     </div>
                   </div>
                   <div className="text-xs text-slate-700 leading-snug">

@@ -8,8 +8,6 @@ import { useAIStore } from '../aiStore';
 export function registerNarrativeHandlers(socket: Socket) {
   // AI generation started - show loading indicator
   socket.on('ai_generation_started', (data: { phase?: 'judgment' | 'narrative'; session_id?: number }) => {
-    console.log('AI generation started:', data);
-
     if (data.phase === 'narrative') {
       useAIStore.getState().setGenerating(true);
       useAIStore.getState().clearCurrentNarrative();
@@ -26,8 +24,7 @@ export function registerNarrativeHandlers(socket: Socket) {
   });
 
   // Narrative stream started
-  socket.on('narrative_stream_started', (data: { session_id: number }) => {
-    console.log('Narrative stream started:', data);
+  socket.on('narrative_stream_started', () => {
     useAIStore.getState().setGenerating(true);
     useAIStore.getState().clearCurrentNarrative();
     useGameStore.getState().setJudgmentModalOpen(false);
@@ -39,13 +36,11 @@ export function registerNarrativeHandlers(socket: Socket) {
 
   // Narrative token - append to current narrative
   socket.on('narrative_token', (data: { token: string; session_id?: number }) => {
-    console.log('Narrative token received:', data.token);
     useAIStore.getState().appendNarrativeToken(data.token);
   });
 
   // Narrative complete (streaming finished)
   socket.on('narrative_complete', (data: { session_id: number }) => {
-    console.log('Narrative complete:', data);
     useAIStore.getState().setGenerating(false);
     useAIStore.getState().clearJudgments();
     useAIStore.getState().clearCurrentNarrative();
@@ -72,8 +67,7 @@ export function registerNarrativeHandlers(socket: Socket) {
 
   // --- LEGACY events (backward compatibility) ---
 
-  socket.on('story_generation_started', (data: { session_id: number }) => {
-    console.log('Story generation started (legacy):', data);
+  socket.on('story_generation_started', () => {
     useAIStore.getState().setGenerating(true);
     useAIStore.getState().clearCurrentNarrative();
     useGameStore.getState().addNotification({
@@ -96,7 +90,6 @@ export function registerNarrativeHandlers(socket: Socket) {
       outcome: string;
     }>;
   }) => {
-    console.log('Story generation complete (legacy):', data);
     useAIStore.getState().setGenerating(false);
     if (data.narrative) {
       useStoryStore.getState().addEntry({
@@ -114,11 +107,22 @@ export function registerNarrativeHandlers(socket: Socket) {
     });
   });
 
+  socket.on('story_generation_error', (data: { session_id?: number; error: string }) => {
+    console.error('Story generation error:', data);
+    useAIStore.getState().setGenerating(false);
+    useActionStore.getState().setActionInputDisabled(false);
+    useGameStore.getState().addError(`스토리 생성 실패: ${data.error}`);
+    useGameStore.getState().addNotification({
+      type: 'error',
+      message: `스토리 생성 실패: ${data.error}`,
+      autoHide: true,
+    });
+  });
+
   socket.on('ai_generation_complete', (data: {
     story_log_id?: number;
     narrative?: string;
   }) => {
-    console.log('AI generation complete:', data);
     useAIStore.getState().setGenerating(false);
     if (data.story_log_id) {
       const completedJudgments = useAIStore.getState().judgments.filter(

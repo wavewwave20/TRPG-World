@@ -1,10 +1,9 @@
-import { useState, useEffect, useRef } from 'react';
+import { memo, useCallback, useState, useEffect, useMemo, useRef } from 'react';
 import { useGameStore } from '../stores/gameStore';
 import { useSocketStore } from '../stores/socketStore';
 import { useActionStore } from '../stores/actionStore';
 import { useStoryStore } from '../stores/storyStore';
 import { useAuthStore } from '../stores/authStore';
-import { useChatStore } from '../stores/chatStore';
 import { useAIStore } from '../stores/aiStore';
 import { getStoryLogs, getCurrentAct } from '../services/api';
 // SessionCreationForm removed from in-session view
@@ -15,6 +14,8 @@ import { useActStore } from '../stores/actStore';
 // import AIGenerationIndicator from './AIGenerationIndicator'; // REMOVED for streaming optimization
 import JudgmentResultsButton from './JudgmentResultsButton';
 import type { JudgmentSummary } from '../services/api';
+import type { JudgmentSetup, JudgmentResult } from '../types/judgment';
+import { isJudgmentResult } from '../types/judgment';
 
 /**
  * **text** 패턴을 <strong> 태그로 변환하는 렌더러.
@@ -30,19 +31,97 @@ function renderBoldText(text: string): React.ReactNode[] {
   });
 }
 
+interface StoryEntryForRender {
+  id: number;
+  role: 'USER' | 'AI';
+  content: string;
+  judgments?: JudgmentSummary[] | null;
+}
+
+interface StoryEntryItemProps {
+  entry: StoryEntryForRender;
+  currentCharacterId?: number;
+  onOpenJudgmentModal: () => void;
+}
+
+const StoryEntryItem = memo(function StoryEntryItem({
+  entry,
+  currentCharacterId,
+  onOpenJudgmentModal,
+}: StoryEntryItemProps) {
+  const entryJudgments = entry.judgments ?? [];
+  const allCompleteForEntry =
+    entryJudgments.length > 0 &&
+    entryJudgments.every((j) => j.dice_result !== null && j.outcome !== null);
+  const myCompletedForEntry = currentCharacterId
+    ? entryJudgments.some(
+        (j) => j.character_id === currentCharacterId && j.dice_result !== null && j.outcome !== null
+      )
+    : false;
+  const showOpenModal = !allCompleteForEntry && !myCompletedForEntry;
+
+  return (
+    <div
+      className={`flex flex-col max-w-full sm:max-w-3xl ${
+        entry.role === 'USER' ? 'ml-auto items-end' : 'mr-auto items-start'
+      }`}
+    >
+      <div
+        className={`text-[10px] font-bold uppercase tracking-wider mb-1 px-1 ${
+          entry.role === 'USER' ? 'text-blue-600' : 'text-slate-500'
+        }`}
+      >
+        {entry.role === 'USER' ? '모험가들' : '던전 마스터'}
+      </div>
+
+      <div
+        className={`px-4 py-3 sm:px-6 sm:py-4 rounded-2xl shadow-sm text-sm leading-relaxed whitespace-pre-wrap max-w-full ${
+          entry.role === 'USER'
+            ? 'bg-blue-50 text-slate-800 border border-blue-100 rounded-tr-none'
+            : 'bg-white text-slate-700 border border-slate-200 rounded-tl-none font-serif'
+        }`}
+      >
+        {renderBoldText(entry.content)}
+
+        {/* Show judgment results button for USER messages with judgments */}
+        {entry.role === 'USER' && entry.judgments && entry.judgments.length > 0 && (
+          <JudgmentResultsButton
+            judgments={entry.judgments}
+            onOpenModal={showOpenModal ? onOpenJudgmentModal : undefined}
+          />
+        )}
+      </div>
+    </div>
+  );
+});
+
+function mapAijudgmentToSummary(judgment: JudgmentSetup | JudgmentResult, index: number): JudgmentSummary {
+  const rolled = isJudgmentResult(judgment);
+  return {
+    // Negative IDs mark ephemeral client-side judgments, and remain stable per action.
+    id: -(Math.abs(judgment.action_id) + index + 1),
+    character_id: judgment.character_id,
+    character_name: judgment.character_name,
+    action_text: judgment.action_text,
+    action_type: null,
+    dice_result: rolled ? judgment.dice_result : null,
+    modifier: judgment.modifier ?? 0,
+    final_value: rolled ? judgment.final_value : null,
+    difficulty: judgment.difficulty,
+    outcome: rolled ? judgment.outcome : null,
+  };
+}
+
 export default function CenterPane() {
   const [actionText, setActionText] = useState('');
   const [showModerationModal, setShowModerationModal] = useState(false);
   
   const currentSession = useGameStore((state) => state.currentSession);
   const currentCharacter = useGameStore((state) => state.currentCharacter);
-  const setSession = useGameStore((state) => state.setSession);
   const setJudgmentModalOpen = useGameStore((state) => state.setJudgmentModalOpen);
   const emit = useSocketStore((state) => state.emit);
-  const clearChat = useChatStore((state) => state.clear);
   
   const actionInputDisabled = useActionStore((state) => state.actionInputDisabled);
-  const setActionInputDisabled = useActionStore((state) => state.setActionInputDisabled);
   const queueCount = useActionStore((state) => state.queueCount);
   
   const entries = useStoryStore((state) => state.entries);
@@ -58,42 +137,97 @@ export default function CenterPane() {
   const actionInputRef = useRef<HTMLInputElement>(null);
   const narrativeEndRef = useRef<HTMLDivElement>(null);
   
-  // Check if current user is host
-  const isHost = currentSession?.hostUserId === currentUserId;
+  // Check if current user is host (number/string mismatch 안전 처리)
+  const isHost =
+    currentSession?.hostUserId !== undefined &&
+    currentSession?.hostUserId !== null &&
+    currentUserId !== null &&
+    currentUserId !== undefined &&
+    Number(currentSession.hostUserId) === Number(currentUserId);
+  const currentCharacterId = currentCharacter?.id;
+  const allJudgmentsComplete = useMemo(
+    () => judgments.length > 0 && judgments.every((j) => j.status === 'complete'),
+    [judgments]
+  );
+  const hasUnresolvedRoundFromLogs = useMemo(() => {
+    if (!entries || entries.length === 0) return false;
+    const last = entries[entries.length - 1];
+    return last.role === 'USER';
+  }, [entries]);
+  const hostCanAdvanceStory =
+    !!isHost &&
+    !!currentSession &&
+    (judgments.length > 0 || hasUnresolvedRoundFromLogs);
+  const openJudgmentModal = useCallback(() => {
+    setJudgmentModalOpen(true);
+  }, [setJudgmentModalOpen]);
 
   // Load story logs on session change using getStoryLogs API
   useEffect(() => {
-    if (currentSession) {
-      getStoryLogs(currentSession.id)
-        .then((data) => {
-          setEntries(data.logs);
-        })
-        .catch((error) => {
-          console.error('Failed to load story logs:', error);
-        });
+    if (!currentSession) {
+      setEntries([]);
+      return;
     }
+
+    // 세션 전환/재입장 시 이전 라운드의 로컬 AI 상태를 정리
+    useAIStore.getState().setGenerating(false);
+    useAIStore.getState().clearCurrentNarrative();
+
+    let cancelled = false;
+    const sessionId = currentSession.id;
+
+    getStoryLogs(sessionId)
+      .then((data) => {
+        if (!cancelled) {
+          setEntries(data.logs);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.error('Failed to load story logs:', error);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [currentSession, setEntries]);
 
   // Load current act on session change
   const setCurrentAct = useActStore((state) => state.setCurrentAct);
   useEffect(() => {
-    if (currentSession) {
-      getCurrentAct(currentSession.id)
-        .then((act) => {
-          if (act) {
-            setCurrentAct({
-              id: act.id,
-              actNumber: act.act_number,
-              title: act.title,
-              subtitle: act.subtitle,
-              startedAt: act.started_at,
-            });
-          }
-        })
-        .catch((error) => {
-          console.error('Failed to load current act:', error);
-        });
+    if (!currentSession) {
+      setCurrentAct(null);
+      return;
     }
+
+    let cancelled = false;
+    const sessionId = currentSession.id;
+
+    getCurrentAct(sessionId)
+      .then((act) => {
+        if (cancelled) return;
+        if (act) {
+          setCurrentAct({
+            id: act.id,
+            actNumber: act.act_number,
+            title: act.title,
+            subtitle: act.subtitle,
+            startedAt: act.started_at,
+          });
+        } else {
+          setCurrentAct(null);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.error('Failed to load current act:', error);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [currentSession, setCurrentAct]);
 
   // Reload story logs when narrative streaming completes
@@ -144,74 +278,34 @@ export default function CenterPane() {
     }
   }, [currentNarrative]);
 
-  // Ensure the latest USER message shows a judgment button during/after rolls
-  // If backend hasn't attached judgments to the story log yet, mirror
-  // the in‑memory AI judgments onto the latest USER entry so the UI can render the button.
-  useEffect(() => {
-    if (!entries || entries.length === 0) return;
-    if (!judgments || judgments.length === 0) return;
+  // Derive client-side judgment projection without mutating the story store.
+  const displayEntries = useMemo(() => {
+    if (!entries || entries.length === 0) return entries;
+    if (!judgments || judgments.length === 0) return entries;
 
-    // Find the last USER entry
     let lastUserIndex = -1;
     for (let i = entries.length - 1; i >= 0; i--) {
-      if (entries[i].role === 'USER') { lastUserIndex = i; break; }
+      if (entries[i].role === 'USER') {
+        lastUserIndex = i;
+        break;
+      }
     }
-    if (lastUserIndex === -1) return;
+    if (lastUserIndex === -1) return entries;
 
     const target = entries[lastUserIndex];
+    const hasBackendJudgments =
+      !!target.judgments &&
+      target.judgments.length > 0 &&
+      target.judgments.every((j) => j.id > 0);
+    if (hasBackendJudgments) return entries;
 
-    // Map in‑memory judgments to JudgmentSummary shape for display
-    const mapped: JudgmentSummary[] = judgments.map((j: any) => ({
-      // Use negative IDs to mark ephemeral mapped judgments (not from backend)
-      id: j.action_id ? -Math.abs(j.action_id) : -Math.floor(Math.random() * 1_000_000) - 1,
-      character_id: j.character_id,
-      character_name: j.character_name,
-      action_text: j.action_text,
-      action_type: (j as any).action_type ?? null,
-      dice_result: (j as any).dice_result ?? null,
-      modifier: j.modifier ?? 0,
-      final_value: (j as any).final_value ?? null,
-      difficulty: j.difficulty,
-      outcome: (j as any).outcome ?? null,
-    }));
-
-    // Decide whether to write/refresh judgments on the target entry
-    const hasBackendJudgments = !!(target.judgments && target.judgments.length > 0 && target.judgments.every(j => j.id > 0));
-
-    // If backend already attached real judgments, do not overwrite
-    if (hasBackendJudgments) return;
-
-    const needsUpdate = (() => {
-      if (!target.judgments || target.judgments.length === 0) return true;
-      if (target.judgments.length !== mapped.length) return true;
-      // If any field differs, refresh
-      for (let i = 0; i < mapped.length; i++) {
-        const a = mapped[i];
-        const b = target.judgments[i] as any;
-        if (
-          a.character_id !== b.character_id ||
-          a.character_name !== b.character_name ||
-          a.action_text !== b.action_text ||
-          a.difficulty !== b.difficulty ||
-          a.modifier !== b.modifier ||
-          a.dice_result !== b.dice_result ||
-          a.final_value !== b.final_value ||
-          a.outcome !== b.outcome
-        ) {
-          return true;
-        }
-      }
-      return false;
-    })();
-
-    if (!needsUpdate) return;
-
+    const mapped = judgments.map((judgment, index) => mapAijudgmentToSummary(judgment, index));
     const next = entries.slice();
-    next[lastUserIndex] = { ...target, judgments: mapped } as any;
-    setEntries(next);
-  }, [entries, judgments, setEntries]);
+    next[lastUserIndex] = { ...target, judgments: mapped };
+    return next;
+  }, [entries, judgments]);
 
-  // Listen for story_committed event to re-enable input
+  // Listen for story_committed event to clear the local action draft and refocus input
   useEffect(() => {
     const socket = useSocketStore.getState().socket;
     
@@ -224,24 +318,13 @@ export default function CenterPane() {
       // Focus input field
       actionInputRef.current?.focus();
     };
-    const handleSessionEnded = (data: { session_id: number; reason?: string }) => {
-      if (!currentSession) return;
-      if (data.session_id !== currentSession.id) return;
-      // Clear state and return to lobby
-      clearChat();
-      setSession(null);
-      setActionInputDisabled(false);
-    };
-    
     socket.on('story_committed', handleStoryCommitted);
-    socket.on('session_ended', handleSessionEnded);
     
     // Cleanup listener on unmount
     return () => {
       socket.off('story_committed', handleStoryCommitted);
-      socket.off('session_ended', handleSessionEnded);
     };
-  }, [currentSession, clearChat, setSession, setActionInputDisabled]);
+  }, []);
 
   // Leaving handled via App header back button
 
@@ -250,6 +333,18 @@ export default function CenterPane() {
     emit('start_game', { session_id: currentSession.id });
   };
 
+  const handleHostAdvanceStory = useCallback(() => {
+    if (!currentSession) return;
+    if (!allJudgmentsComplete) {
+      const confirmed = window.confirm('아직 완료되지 않은 판정을 모두 확정하고 이야기를 진행할까요?');
+      if (!confirmed) return;
+    }
+    emit('request_narrative_stream', {
+      session_id: currentSession.id,
+      force: !allJudgmentsComplete,
+    });
+  }, [currentSession, allJudgmentsComplete, emit]);
+
   const handleSubmitAction = () => {
     // Validate action text is non-empty
     if (!actionText.trim()) {
@@ -257,7 +352,7 @@ export default function CenterPane() {
     }
     
     // Ensure we have session and character
-    if (!currentSession || !currentCharacter) {
+    if (!currentSession || !currentCharacter || !currentUserId) {
       return;
     }
     
@@ -295,18 +390,34 @@ export default function CenterPane() {
           <div className="flex items-center gap-3">
             {/* Moderation Button - Only show when user is host */}
             {isHost && (
-              <button
-                onClick={() => setShowModerationModal(true)}
-                className="relative bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-3 py-2.5 lg:py-1.5 rounded-lg text-xs font-semibold shadow-sm transition-all hover:border-slate-300"
-              >
-                행동 결정
-                {/* Queue count badge - Show when queueCount > 0 */}
-                {queueCount > 0 && (
-                  <span className="absolute -top-2 -right-2 bg-red-500 text-white text-[10px] font-bold rounded-full h-5 w-5 flex items-center justify-center shadow-sm border border-white">
-                    {queueCount}
-                  </span>
+              <>
+                <button
+                  onClick={() => setShowModerationModal(true)}
+                  className="relative bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-3 py-2.5 lg:py-1.5 rounded-lg text-xs font-semibold shadow-sm transition-all hover:border-slate-300"
+                >
+                  행동 결정
+                  {/* Queue count badge - Show when queueCount > 0 */}
+                  {queueCount > 0 && (
+                    <span className="absolute -top-2 -right-2 bg-red-500 text-white text-[10px] font-bold rounded-full h-5 w-5 flex items-center justify-center shadow-sm border border-white">
+                      {queueCount}
+                    </span>
+                  )}
+                </button>
+
+                {hostCanAdvanceStory && (
+                  <button
+                    onClick={handleHostAdvanceStory}
+                    disabled={isGenerating}
+                    className="bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 px-3 py-2.5 lg:py-1.5 rounded-lg text-xs font-semibold shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isGenerating
+                      ? '이야기 생성 중...'
+                      : allJudgmentsComplete
+                      ? '스토리 진행'
+                      : '판정 건너뛰고 스토리 진행'}
+                  </button>
                 )}
-              </button>
+              </>
             )}
           </div>
         ) : (
@@ -326,7 +437,7 @@ export default function CenterPane() {
         
         {currentSession ? (
           <>
-            {entries.length === 0 && !currentNarrative ? (
+            {displayEntries.length === 0 && !currentNarrative ? (
               <div className="flex flex-col items-center justify-center h-48 text-slate-400 text-center">
                 <div className="text-4xl mb-3">📜</div>
                 <p>스토리북이 비어있습니다. 당신의 모험이 쓰여지길 기다립니다...</p>
@@ -341,64 +452,14 @@ export default function CenterPane() {
                 )}
               </div>
             ) : (
-              entries.map((entry) => {
-                // Debug log for ALL messages to see what data we have
-                console.log(`📝 ${entry.role} Message:`, {
-                  id: entry.id,
-                  role: entry.role,
-                  hasJudgments: !!entry.judgments,
-                  judgmentCount: entry.judgments?.length || 0,
-                  judgments: entry.judgments
-                });
-                
-                // Check if button should render
-                const shouldShowButton = entry.role === 'USER' && entry.judgments && entry.judgments.length > 0;
-                if (entry.role === 'USER') {
-                  console.log(`🔍 USER Message button check:`, {
-                    id: entry.id,
-                    shouldShowButton,
-                    hasJudgments: !!entry.judgments,
-                    judgmentCount: entry.judgments?.length || 0
-                  });
-                }
-                
-                // Determine if reopen modal button should be shown for this entry
-                const entryJudgments = entry.judgments ?? [];
-                const allCompleteForEntry = entryJudgments.length > 0 && entryJudgments.every((j: any) => j.dice_result !== null && j.outcome !== null);
-                const myCompletedForEntry = currentCharacter ? entryJudgments.some((j: any) => j.character_id === currentCharacter.id && j.dice_result !== null && j.outcome !== null) : false;
-                const showOpenModal = !allCompleteForEntry && !myCompletedForEntry;
-
+              displayEntries.map((entry) => {
                 return (
-                  <div
+                  <StoryEntryItem
                     key={entry.id}
-                    className={`flex flex-col max-w-full sm:max-w-3xl ${
-                      entry.role === 'USER' ? 'ml-auto items-end' : 'mr-auto items-start'
-                    }`}
-                  >
-                    <div className={`text-[10px] font-bold uppercase tracking-wider mb-1 px-1 ${
-                      entry.role === 'USER' ? 'text-blue-600' : 'text-slate-500'
-                    }`}>
-                      {entry.role === 'USER' ? '모험가들' : '던전 마스터'}
-                    </div>
-                    
-                    <div
-                      className={`px-4 py-3 sm:px-6 sm:py-4 rounded-2xl shadow-sm text-sm leading-relaxed whitespace-pre-wrap max-w-full ${
-                        entry.role === 'USER' 
-                          ? 'bg-blue-50 text-slate-800 border border-blue-100 rounded-tr-none' 
-                          : 'bg-white text-slate-700 border border-slate-200 rounded-tl-none font-serif'
-                      }`}
-                    >
-                      {renderBoldText(entry.content)}
-
-                      {/* Show judgment results button for USER messages with judgments */}
-                      {entry.role === 'USER' && entry.judgments && entry.judgments.length > 0 && (
-                        <JudgmentResultsButton 
-                          judgments={entry.judgments}
-                          onOpenModal={showOpenModal ? () => setJudgmentModalOpen(true) : undefined}
-                        />
-                      )}
-                    </div>
-                  </div>
+                    entry={entry}
+                    currentCharacterId={currentCharacterId}
+                    onOpenJudgmentModal={openJudgmentModal}
+                  />
                 );
               })
             )}

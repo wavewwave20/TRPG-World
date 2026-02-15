@@ -19,6 +19,9 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 # Registration access code from environment variable
 REGISTRATION_CODE = os.getenv("REGISTRATION_CODE", "")
 
+# Admin username from environment variable
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "")
+
 
 def hash_password(password: str) -> str:
     """Hash password using SHA-256."""
@@ -126,3 +129,37 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
     return LoginResponse(user_id=user.id, username=user.username, message="Login successful")
+
+
+class AdminCheckResponse(BaseModel):
+    """Admin check response model."""
+
+    is_admin: bool
+
+
+@router.get("/check-admin", response_model=AdminCheckResponse)
+def check_admin(user_id: int, db: Session = Depends(get_db)):
+    """Check if a user is an admin based on ADMIN_USERNAME env var."""
+    if not ADMIN_USERNAME:
+        return AdminCheckResponse(is_admin=False)
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return AdminCheckResponse(is_admin=user.username == ADMIN_USERNAME)
+
+
+def verify_admin(user_id: int, db: Session) -> User:
+    """Verify that the user is an admin. Raises HTTPException 403 if not."""
+    if not ADMIN_USERNAME:
+        raise HTTPException(status_code=403, detail="Admin not configured")
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if user.username != ADMIN_USERNAME:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    return user

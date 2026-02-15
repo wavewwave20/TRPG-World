@@ -10,6 +10,7 @@ import HostSessionsManager from './components/HostSessionsManager';
 import LoginForm from './components/LoginForm';
 import CharacterManagement from './components/CharacterManagement';
 import SessionInfoDropdown from './components/SessionInfoDropdown';
+import LLMSettingsPage from './components/LLMSettingsPage';
 import type { Character as BaseCharacter } from './types/character';
 import './App.css'
 
@@ -21,7 +22,11 @@ interface Character extends BaseCharacter {
 }
 
 function App() {
-  const { connect, disconnect, reconnect, connected, error } = useSocketStore();
+  const connect = useSocketStore((state) => state.connect);
+  const disconnect = useSocketStore((state) => state.disconnect);
+  const reconnect = useSocketStore((state) => state.reconnect);
+  const connected = useSocketStore((state) => state.connected);
+  const error = useSocketStore((state) => state.error);
   const currentSession = useGameStore((state) => state.currentSession);
   const setCharacter = useGameStore((state) => state.setCharacter);
   const setSession = useGameStore((state) => state.setSession);
@@ -31,38 +36,35 @@ function App() {
   const leaveSessionSock = useSocketStore((state) => state.leaveSession);
   const clearChat = useChatStore((state) => state.clear);
   
-  const [showLobby, setShowLobby] = useState(true);
+  const isAdmin = useAuthStore((state) => state.isAdmin);
+  const checkAdmin = useAuthStore((state) => state.checkAdmin);
+
   const [selectedCharacter, setSelectedCharacter] = useState<Character | null>(null);
+  const [showLLMSettings, setShowLLMSettings] = useState(false);
+  const showLobby = !currentSession;
 
   useEffect(() => {
     // Initialize socket connection on mount if authenticated
     if (isAuthenticated) {
       connect();
+      checkAdmin();
     }
-    
+
     // Cleanup: disconnect on unmount
     return () => {
       disconnect();
     };
-  }, [connect, disconnect, isAuthenticated]);
-
-  // Show game layout when session is active
-  useEffect(() => {
-    if (currentSession) {
-      setShowLobby(false);
-    }
-  }, [currentSession]);
+  }, [connect, disconnect, isAuthenticated, checkAdmin]);
 
   const handleBackToLobby = async () => {
-    // If in a session, perform leave before going to lobby
-    if (currentSession && connected && userId) {
+    // If in a session, always try to leave gracefully before returning to lobby.
+    // Host can explicitly end the room via the dedicated "방 종료" button.
+    if (currentSession && userId) {
       try {
-        if (currentSession.hostUserId === userId) {
-          // Host: end the session (broadcasts session_ended to players)
-          await fetch(`${API_BASE_URL}/api/sessions/${currentSession.id}/end?user_id=${userId}`, { method: 'POST' });
-        } else {
-          // Participant: leave only
-          await fetch(`${API_BASE_URL}/api/sessions/${currentSession.id}/leave?user_id=${userId}`, { method: 'POST' });
+        await fetch(`${API_BASE_URL}/api/sessions/${currentSession.id}/leave?user_id=${userId}`, {
+          method: 'POST'
+        });
+        if (connected) {
           leaveSessionSock(currentSession.id, userId);
         }
       } catch (e) {
@@ -72,7 +74,6 @@ function App() {
       clearNotifications();
       setSession(null);
     }
-    setShowLobby(true);
   };
 
   const handleBackToCharacterSelect = () => {
@@ -92,7 +93,6 @@ function App() {
     clearChat();
     clearNotifications();
     setSession(null);
-    setShowLobby(true);
   };
 
   const isHost = currentSession?.hostUserId === userId;
@@ -168,6 +168,19 @@ function App() {
               </button>
             )}
 
+            {/* Admin LLM Settings Button */}
+            {isAdmin && showLobby && (
+              <button
+                onClick={() => setShowLLMSettings(true)}
+                className="flex items-center justify-center w-10 h-10 lg:w-8 lg:h-8 rounded-full hover:bg-slate-100 text-slate-500 hover:text-blue-600 transition-all border border-transparent hover:border-slate-200"
+                title="LLM Settings"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
+                </svg>
+              </button>
+            )}
+
             {/* Connection Status Pill */}
             <div className={`px-3 sm:px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold transition-all whitespace-nowrap shadow-sm border ${
               connected
@@ -206,8 +219,12 @@ function App() {
           </div>
         )}
         
-        {/* Show lobby or game based on state */}
-        {showLobby ? (
+        {/* Show LLM Settings, lobby, or game based on state */}
+        {showLLMSettings ? (
+          <div className="h-full w-full overflow-y-auto py-6">
+            <LLMSettingsPage onBack={() => setShowLLMSettings(false)} />
+          </div>
+        ) : showLobby ? (
           <div className="h-full w-full overflow-y-auto py-6">
             <div className="flex flex-col items-center justify-center w-[95%] max-w-7xl mx-auto min-h-full">
               <div className="w-full text-center mb-8 sm:mb-12">

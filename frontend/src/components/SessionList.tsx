@@ -1,10 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useGameStore } from '../stores/gameStore';
 import { useSocketStore } from '../stores/socketStore';
 import { useAuthStore } from '../stores/authStore';
 import { useChatStore } from '../stores/chatStore';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+const SESSION_POLL_VISIBLE_MS = 15000;
+const SESSION_POLL_HIDDEN_MS = 60000;
 
 interface Session {
   id: number;
@@ -13,6 +15,12 @@ interface Session {
   participant_count: number;
   created_at: string;
   is_active: boolean;
+}
+
+interface SessionParticipantsUpdate {
+  session_id: number;
+  participant_count?: number;
+  participants?: Array<{ user_id: number; character_id: number; character_name: string }>;
 }
 
 interface SessionListProps {
@@ -26,6 +34,8 @@ export default function SessionList({ onJoinSuccess }: SessionListProps) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const pollTimerRef = useRef<number | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
   
   const setSession = useGameStore((state) => state.setSession);
   const currentSession = useGameStore((state) => state.currentSession);
@@ -38,57 +48,108 @@ export default function SessionList({ onJoinSuccess }: SessionListProps) {
   const userId = useAuthStore((state) => state.userId);
   const clearChat = useChatStore((state) => state.clear);
 
-  useEffect(() => {
-    loadSessions();
-    // Refresh sessions every 5 seconds
-    const interval = setInterval(loadSessions, 5000);
-    return () => clearInterval(interval);
+  const loadSessions = useCallback(async (options?: { showRefreshing?: boolean }) => {
+    const showRefreshing = options?.showRefreshing ?? false;
+    const controller = new AbortController();
+
+    // Abort stale in-flight request and keep only latest one.
+    abortRef.current?.abort();
+    abortRef.current = controller;
+
+    try {
+      if (showRefreshing) {
+        setRefreshing(true);
+      }
+      const response = await fetch(`${API_BASE_URL}/api/sessions/`, { signal: controller.signal });
+      if (response.ok) {
+        const data = await response.json();
+        // Filter to only show active sessions (backend already filters, but double-check)
+        const activeSessions = data.filter((session: Session) => session.is_active !== false);
+        setSessions(activeSessions);
+      }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        return;
+      }
+      console.error('Failed to load sessions:', err);
+    } finally {
+      if (abortRef.current === controller) {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    }
   }, []);
+
+  useEffect(() => {
+    const refreshNow = () => {
+      void loadSessions();
+    };
+
+    const startPolling = () => {
+      if (pollTimerRef.current !== null) {
+        window.clearInterval(pollTimerRef.current);
+      }
+      const intervalMs =
+        document.visibilityState === 'visible' ? SESSION_POLL_VISIBLE_MS : SESSION_POLL_HIDDEN_MS;
+      pollTimerRef.current = window.setInterval(() => {
+        void loadSessions();
+      }, intervalMs);
+    };
+
+    refreshNow();
+    startPolling();
+
+    const handleVisibilityChange = () => {
+      refreshNow();
+      startPolling();
+    };
+
+    window.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      if (pollTimerRef.current !== null) {
+        window.clearInterval(pollTimerRef.current);
+      }
+      abortRef.current?.abort();
+      window.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [loadSessions]);
 
   // Listen for session_ended events to update the session list
   useEffect(() => {
     if (!socket) return;
 
     const handleSessionEnded = (data: { session_id: number; reason?: string }) => {
-      console.log('Session ended event received:', data);
       // Remove the ended session from the list immediately
       setSessions((prevSessions) => 
         prevSessions.filter((session) => session.id !== data.session_id)
       );
     };
 
-    const handleUserJoined = (data: { 
-      session_id: number; 
-      participant_count?: number;
-      participants?: any[];
-    }) => {
+    const handleUserJoined = (data: SessionParticipantsUpdate) => {
       // Update participant count when a user joins
-      if (data.participant_count !== undefined) {
-        setSessions((prevSessions) =>
-          prevSessions.map((session) =>
-            session.id === data.session_id
-              ? { ...session, participant_count: data.participant_count! }
-              : session
-          )
-        );
-      }
+      const participantCount = data.participant_count;
+      if (participantCount === undefined) return;
+      setSessions((prevSessions) =>
+        prevSessions.map((session) =>
+          session.id === data.session_id
+            ? { ...session, participant_count: participantCount }
+            : session
+        )
+      );
     };
 
-    const handleUserLeft = (data: { 
-      session_id: number; 
-      participant_count?: number;
-      participants?: any[];
-    }) => {
+    const handleUserLeft = (data: SessionParticipantsUpdate) => {
       // Update participant count when a user leaves
-      if (data.participant_count !== undefined) {
-        setSessions((prevSessions) =>
-          prevSessions.map((session) =>
-            session.id === data.session_id
-              ? { ...session, participant_count: data.participant_count! }
-              : session
-          )
-        );
-      }
+      const participantCount = data.participant_count;
+      if (participantCount === undefined) return;
+      setSessions((prevSessions) =>
+        prevSessions.map((session) =>
+          session.id === data.session_id
+            ? { ...session, participant_count: participantCount }
+            : session
+        )
+      );
     };
 
     socket.on('session_ended', handleSessionEnded);
@@ -101,24 +162,6 @@ export default function SessionList({ onJoinSuccess }: SessionListProps) {
       socket.off('user_left', handleUserLeft);
     };
   }, [socket]);
-
-  const loadSessions = async () => {
-    try {
-      if (!loading) setRefreshing(true);
-      const response = await fetch(`${API_BASE_URL}/api/sessions/`);
-      if (response.ok) {
-        const data = await response.json();
-        // Filter to only show active sessions (backend already filters, but double-check)
-        const activeSessions = data.filter((session: Session) => session.is_active !== false);
-        setSessions(activeSessions);
-      }
-    } catch (err) {
-      console.error('Failed to load sessions:', err);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  };
 
   const handleJoinSession = async (id: number, title: string, hostUserId: number) => {
     setError(null);
@@ -166,8 +209,21 @@ export default function SessionList({ onJoinSuccess }: SessionListProps) {
       });
 
       if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.detail || 'Failed to join session');
+        let detail = 'Failed to join session';
+        try {
+          const data = await response.json();
+          detail = data?.detail || detail;
+        } catch {
+          // ignore JSON parse errors
+        }
+        const normalized = String(detail).toLowerCase();
+        const isAlreadyJoinedError =
+          response.status === 400 &&
+          (normalized.includes('already joined') || normalized.includes('이미 참가'));
+
+        if (!isAlreadyJoinedError) {
+          throw new Error(detail);
+        }
       }
       
       // Update game store with session info
@@ -232,7 +288,7 @@ export default function SessionList({ onJoinSuccess }: SessionListProps) {
       <div className="mb-6 flex flex-col">
         <div className="mb-2 flex items-center justify-end">
           <button
-            onClick={loadSessions}
+            onClick={() => loadSessions({ showRefreshing: true })}
             disabled={loading || refreshing}
             className="inline-flex items-center gap-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-3 py-1.5 rounded-lg text-xs font-semibold shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >

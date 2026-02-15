@@ -3,7 +3,6 @@ import { useGameStore } from '../gameStore';
 import { useActionStore } from '../actionStore';
 import { useStoryStore } from '../storyStore';
 import { useChatStore } from '../chatStore';
-import { useAIStore } from '../aiStore';
 
 export function registerSessionHandlers(socket: Socket) {
   socket.on('user_joined', (data: {
@@ -13,7 +12,6 @@ export function registerSessionHandlers(socket: Socket) {
     participants?: Array<{ user_id: number; character_id: number; character_name: string }>;
     participant_count?: number;
   }) => {
-    console.log('User joined:', data);
     if (data.participants) {
       useGameStore.getState().setParticipants(data.participants);
     }
@@ -32,7 +30,6 @@ export function registerSessionHandlers(socket: Socket) {
     participants?: Array<{ user_id: number; character_id: number; character_name: string }>;
     participant_count?: number;
   }) => {
-    console.log('User left:', data);
     if (data.participants) {
       useGameStore.getState().setParticipants(data.participants);
     }
@@ -56,11 +53,6 @@ export function registerSessionHandlers(socket: Socket) {
     };
     queue_count: number;
   }) => {
-    console.log('Action submitted:', {
-      action_id: data.action.id,
-      character_name: data.action.character_name,
-      queue_count: data.queue_count,
-    });
     useActionStore.getState().setQueueCount(data.queue_count);
     useGameStore.getState().addNotification({
       type: 'action_submitted',
@@ -69,8 +61,10 @@ export function registerSessionHandlers(socket: Socket) {
     });
   });
 
-  socket.on('queue_updated', (data: { actions: any[]; queue_count?: number }) => {
-    console.log('Queue updated:', data);
+  socket.on('queue_updated', (data: {
+    actions: Array<{ id: number; player_id: number; character_name: string; action_text: string; order: number }>;
+    queue_count?: number;
+  }) => {
     const queueCount = data.queue_count !== undefined ? data.queue_count : data.actions.length;
     useActionStore.getState().setQueueCount(queueCount);
   });
@@ -78,7 +72,6 @@ export function registerSessionHandlers(socket: Socket) {
   socket.on('story_committed', (data: {
     story_entry: { id: number; role: 'USER' | 'AI'; content: string; created_at: string };
   }) => {
-    console.log('Story committed:', data);
     useStoryStore.getState().addEntry(data.story_entry);
     useActionStore.getState().setActionInputDisabled(false);
     useGameStore.getState().addNotification({
@@ -99,17 +92,5 @@ export function registerSessionHandlers(socket: Socket) {
       character_name: data.character_name,
       message: data.message,
     });
-  });
-
-  socket.on('session_ended', (data: { session_id: number; reason?: string }) => {
-    try {
-      useGameStore.getState().addNotification({
-        type: 'alert',
-        message: '세션이 종료되었습니다.',
-        sessionId: (data as any)?.session_id,
-        autoHide: false,
-      });
-      useAIStore.getState().clearJudgments();
-    } catch { /* ignore */ }
   });
 }

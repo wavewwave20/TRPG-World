@@ -178,12 +178,14 @@ def join_session(session_id: int, join_data: SessionJoinRequest, db: Session = D
 
     Raises:
         HTTPException 404: If session or character not found
-        HTTPException 400: If already joined or character doesn't belong to user
+        HTTPException 400: If session is inactive or character doesn't belong to user
     """
     # Verify session exists
     session = db.query(GameSession).filter(GameSession.id == session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail=f"Session with id {session_id} not found")
+    if not session.is_active:
+        raise HTTPException(status_code=400, detail="세션이 종료되었습니다.")
 
     # Verify character exists and belongs to user
     character = (
@@ -202,22 +204,34 @@ def join_session(session_id: int, join_data: SessionJoinRequest, db: Session = D
         .first()
     )
 
-    if existing:
-        raise HTTPException(status_code=400, detail="User already joined this session")
-
     try:
-        # Create participant record
-        participant = SessionParticipant(
-            session_id=session_id,
-            user_id=join_data.user_id,
-            character_id=join_data.character_id,
-            joined_at=datetime.utcnow(),
-        )
+        if existing:
+            # Rejoin should be idempotent: refresh joined_at and allow character switch.
+            existing.character_id = join_data.character_id
+            existing.joined_at = datetime.utcnow()
+            db.commit()
+            return {
+                "message": "Successfully rejoined session",
+                "character_name": character.name,
+                "rejoined": True,
+            }
 
-        db.add(participant)
+        # Create participant record
+        db.add(
+            SessionParticipant(
+                session_id=session_id,
+                user_id=join_data.user_id,
+                character_id=join_data.character_id,
+                joined_at=datetime.utcnow(),
+            )
+        )
         db.commit()
 
-        return {"message": "Successfully joined session", "character_name": character.name}
+        return {
+            "message": "Successfully joined session",
+            "character_name": character.name,
+            "rejoined": False,
+        }
 
     except Exception as e:
         db.rollback()

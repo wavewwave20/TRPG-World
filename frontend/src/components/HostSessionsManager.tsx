@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuthStore } from "../stores/authStore";
 import { useGameStore } from "../stores/gameStore";
 import { useSocketStore } from "../stores/socketStore";
@@ -30,12 +30,25 @@ interface SessionDuplicateResponse {
   message: string;
 }
 
+interface JudgmentDetail {
+  id: number;
+  character_id: number;
+  character_name: string;
+  action_text: string;
+  action_type: string | null;
+  dice_result: number | null;
+  modifier: number;
+  final_value: number | null;
+  difficulty: number;
+  outcome: string | null;
+}
+
 interface StoryLogEntry {
   id: number;
   role: "USER" | "AI";
   content: string;
   created_at: string;
-  judgments?: Array<{ id: number }> | null;
+  judgments?: JudgmentDetail[] | null;
 }
 
 interface StoryLogsResponse {
@@ -57,6 +70,7 @@ export default function HostSessionsManager() {
   const [refreshing, setRefreshing] = useState(false);
   const [busySessionId, setBusySessionId] = useState<number | null>(null);
   const [busyStoryLogId, setBusyStoryLogId] = useState<number | null>(null);
+  const [busyJudgmentId, setBusyJudgmentId] = useState<number | null>(null);
   const [storyActionLoading, setStoryActionLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -73,10 +87,36 @@ export default function HostSessionsManager() {
   const [storyEditContent, setStoryEditContent] = useState("");
   const [newStoryRole, setNewStoryRole] = useState<"USER" | "AI">("AI");
   const [newStoryContent, setNewStoryContent] = useState("");
+  const hasLoadedOnceRef = useRef(false);
+  const [expandedJudgments, setExpandedJudgments] = useState<Set<number>>(new Set());
+
+  const toggleJudgmentExpand = (entryId: number) => {
+    setExpandedJudgments((prev) => {
+      const next = new Set(prev);
+      if (next.has(entryId)) next.delete(entryId);
+      else next.add(entryId);
+      return next;
+    });
+  };
+
+  const outcomeColor = (outcome: string | null) => {
+    if (!outcome) return "text-slate-500";
+    if (outcome === "대성공") return "text-emerald-600 font-bold";
+    if (outcome === "성공") return "text-emerald-600";
+    if (outcome === "실패") return "text-red-600";
+    if (outcome === "대실패") return "text-red-600 font-bold";
+    return "text-slate-600";
+  };
 
   const getSystemPrompt = (session: HostSessionItem) => session.system_prompt ?? session.world_prompt;
+  const patchSessionItem = (id: number, patch: Partial<HostSessionItem>) => {
+    setItems((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+  };
+  const removeSessionItem = (id: number) => {
+    setItems((prev) => prev.filter((item) => item.id !== id));
+  };
 
-  const parseError = async (res: Response) => {
+  const parseError = useCallback(async (res: Response) => {
     const text = await res.text();
     if (!text) return `Request failed (${res.status})`;
     try {
@@ -86,13 +126,13 @@ export default function HostSessionsManager() {
     } catch {
       return text;
     }
-  };
+  }, []);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     if (!userId) return;
     try {
       setError(null);
-      if (!loading) setRefreshing(true);
+      if (hasLoadedOnceRef.current) setRefreshing(true);
       const res = await fetch(`${API_BASE_URL}/api/sessions/host/${userId}`);
       if (!res.ok) throw new Error(await parseError(res));
       const data = (await res.json()) as HostSessionItem[];
@@ -102,27 +142,47 @@ export default function HostSessionsManager() {
     } finally {
       setLoading(false);
       setRefreshing(false);
+      hasLoadedOnceRef.current = true;
     }
-  };
+  }, [parseError, userId]);
 
-  const loadStoryEntries = async (sessionId: number) => {
+  const loadStoryEntries = useCallback(async (sessionId: number): Promise<number | null> => {
     try {
       setStoryLoading(true);
       setError(null);
       const res = await fetch(`${API_BASE_URL}/api/story_logs/${sessionId}`);
       if (!res.ok) throw new Error(await parseError(res));
       const data = (await res.json()) as StoryLogsResponse;
-      setStoryEntries(data.logs ?? []);
+      const logs = data.logs ?? [];
+      setStoryEntries(logs);
+      return logs.length;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load story logs");
+      return null;
     } finally {
       setStoryLoading(false);
     }
-  };
+  }, [parseError]);
 
   useEffect(() => {
-    load();
-  }, [userId]);
+    hasLoadedOnceRef.current = false;
+    setLoading(true);
+    void load();
+  }, [load]);
+
+  useEffect(() => {
+    if (!storySessionId) return;
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setStorySessionId(null);
+        setStoryEntries([]);
+        setEditingStoryLogId(null);
+        setNewStoryContent("");
+      }
+    };
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [storySessionId]);
 
   const restart = async (id: number) => {
     if (!userId) return;
@@ -157,7 +217,10 @@ export default function HostSessionsManager() {
         joinSessionSock(id, userId, currentCharacter.id);
       }
 
-      await load();
+      patchSessionItem(id, {
+        is_active: true,
+        participant_count: Math.max(1, it?.participant_count ?? 0),
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to restart session");
     } finally {
@@ -176,7 +239,7 @@ export default function HostSessionsManager() {
       });
       if (!res.ok) throw new Error(await parseError(res));
       if (editingId === id) setEditingId(null);
-      await load();
+      patchSessionItem(id, { is_active: false, participant_count: 0 });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to end session");
     } finally {
@@ -246,7 +309,11 @@ export default function HostSessionsManager() {
       if (!res.ok) throw new Error(await parseError(res));
       cancelEdit();
       setNotice("세션 정보를 수정했습니다.");
-      await load();
+      patchSessionItem(id, {
+        title: trimmedTitle,
+        world_prompt: trimmedPrompt,
+        system_prompt: trimmedPrompt,
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to update session");
     } finally {
@@ -267,11 +334,10 @@ export default function HostSessionsManager() {
       if (!res.ok) throw new Error(await parseError(res));
       if (editingId === id) cancelEdit();
       if (storySessionId === id) {
-        setStorySessionId(null);
-        setStoryEntries([]);
+        closeStoryManager();
       }
       setNotice("세션을 삭제했습니다.");
-      await load();
+      removeSessionItem(id);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to delete session");
     } finally {
@@ -279,13 +345,14 @@ export default function HostSessionsManager() {
     }
   };
 
-  const toggleStoryManager = async (sessionId: number) => {
-    if (storySessionId === sessionId) {
-      setStorySessionId(null);
-      setStoryEntries([]);
-      setEditingStoryLogId(null);
-      return;
-    }
+  const closeStoryManager = () => {
+    setStorySessionId(null);
+    setStoryEntries([]);
+    setEditingStoryLogId(null);
+    setNewStoryContent("");
+  };
+
+  const openStoryManager = async (sessionId: number) => {
     setStorySessionId(sessionId);
     setEditingStoryLogId(null);
     setNewStoryContent("");
@@ -328,8 +395,10 @@ export default function HostSessionsManager() {
       if (!res.ok) throw new Error(await parseError(res));
       cancelStoryEdit();
       setNotice("스토리 메시지를 수정했습니다.");
-      await loadStoryEntries(sessionId);
-      await load();
+      const count = await loadStoryEntries(sessionId);
+      if (count !== null) {
+        patchSessionItem(sessionId, { story_log_count: count });
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to update story log");
     } finally {
@@ -350,12 +419,39 @@ export default function HostSessionsManager() {
       if (!res.ok) throw new Error(await parseError(res));
       if (editingStoryLogId === logId) cancelStoryEdit();
       setNotice("스토리 메시지를 삭제했습니다.");
-      await loadStoryEntries(sessionId);
-      await load();
+      const count = await loadStoryEntries(sessionId);
+      if (count !== null) {
+        patchSessionItem(sessionId, { story_log_count: count });
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to delete story log");
     } finally {
       setBusyStoryLogId(null);
+    }
+  };
+
+  const deleteJudgmentEntry = async (sessionId: number, judgmentId: number) => {
+    if (!userId) return;
+    if (!confirm("이 행동 메시지를 삭제할까요?")) return;
+
+    try {
+      setBusyJudgmentId(judgmentId);
+      setError(null);
+      setNotice(null);
+      const res = await fetch(`${API_BASE_URL}/api/story_logs/judgment/${judgmentId}?user_id=${userId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(await parseError(res));
+
+      setNotice("행동 메시지를 삭제했습니다.");
+      const count = await loadStoryEntries(sessionId);
+      if (count !== null) {
+        patchSessionItem(sessionId, { story_log_count: count });
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete action message");
+    } finally {
+      setBusyJudgmentId(null);
     }
   };
 
@@ -381,14 +477,18 @@ export default function HostSessionsManager() {
       if (!res.ok) throw new Error(await parseError(res));
       setNewStoryContent("");
       setNotice("스토리 메시지를 추가했습니다.");
-      await loadStoryEntries(sessionId);
-      await load();
+      const count = await loadStoryEntries(sessionId);
+      if (count !== null) {
+        patchSessionItem(sessionId, { story_log_count: count });
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create story log");
     } finally {
       setStoryActionLoading(false);
     }
   };
+
+  const storySession = storySessionId ? items.find((item) => item.id === storySessionId) ?? null : null;
 
   return (
     <div className="bg-white border border-slate-200 rounded-xl p-8 shadow-card hover:shadow-card-hover transition-all duration-300 h-full flex flex-col">
@@ -536,16 +636,16 @@ export default function HostSessionsManager() {
                         복제
                       </button>
                       <button
-                        onClick={() => toggleStoryManager(s.id)}
+                        onClick={() => openStoryManager(s.id)}
                         className={`px-3 py-1.5 rounded text-xs font-semibold border ${
                           s.is_active
                             ? "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed"
                             : "bg-white hover:bg-violet-50 text-violet-700 border-violet-200"
                         }`}
                         disabled={s.is_active || busySessionId === s.id}
-                        title={s.is_active ? "세션을 먼저 종료하세요" : "스토리 메시지 편집"}
+                        title={s.is_active ? "세션을 먼저 종료하세요" : "스토리 관리 화면 열기"}
                       >
-                        {storySessionId === s.id ? "스토리 닫기" : "스토리 관리"}
+                        스토리 관리
                       </button>
                       <button
                         onClick={() => del(s.id)}
@@ -563,140 +663,182 @@ export default function HostSessionsManager() {
                   )}
                 </div>
 
-                {storySessionId === s.id && !s.is_active && (
-                  <div className="mt-2 border border-violet-100 rounded-lg bg-white p-3 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <h6 className="text-sm font-semibold text-violet-800">스토리 메시지 관리</h6>
-                      <button
-                        onClick={() => loadStoryEntries(s.id)}
-                        disabled={storyLoading}
-                        className="text-xs px-2 py-1 rounded border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-                      >
-                        {storyLoading ? "로딩..." : "다시 불러오기"}
-                      </button>
-                    </div>
-
-                    <div className="border border-slate-200 rounded p-2 space-y-2 bg-slate-50">
-                      <p className="text-xs font-semibold text-slate-600">메시지 추가</p>
-                      <div className="flex gap-2">
-                        <select
-                          value={newStoryRole}
-                          onChange={(e) => setNewStoryRole(e.target.value as "USER" | "AI")}
-                          className="border border-slate-300 rounded px-2 py-1 text-xs bg-white"
-                        >
-                          <option value="USER">USER</option>
-                          <option value="AI">AI</option>
-                        </select>
-                        <button
-                          onClick={() => addStoryEntry(s.id)}
-                          disabled={storyActionLoading}
-                          className="bg-violet-600 hover:bg-violet-700 text-white px-3 py-1 rounded text-xs font-semibold disabled:opacity-50"
-                        >
-                          추가
-                        </button>
-                      </div>
-                      <textarea
-                        value={newStoryContent}
-                        onChange={(e) => setNewStoryContent(e.target.value)}
-                        rows={3}
-                        className="w-full border border-slate-300 rounded px-2 py-1 text-sm resize-y bg-white"
-                        placeholder="추가할 스토리 메시지를 입력하세요"
-                      />
-                    </div>
-
-                    <div className="max-h-72 overflow-y-auto space-y-2">
-                      {storyLoading ? (
-                        <div className="text-center py-6 text-slate-400 text-sm">스토리 불러오는 중...</div>
-                      ) : storyEntries.length === 0 ? (
-                        <div className="text-center py-6 text-slate-400 text-sm">스토리 메시지가 없습니다.</div>
-                      ) : (
-                        storyEntries.map((entry) => (
-                          <div key={entry.id} className="border border-slate-200 rounded bg-slate-50 p-2">
-                            <div className="flex items-center justify-between gap-2 mb-1">
-                              <div className="flex items-center gap-2">
-                                <span
-                                  className={`text-[10px] font-bold px-2 py-0.5 rounded ${
-                                    entry.role === "USER"
-                                      ? "bg-blue-100 text-blue-700"
-                                      : "bg-slate-200 text-slate-700"
-                                  }`}
-                                >
-                                  {entry.role}
-                                </span>
-                                <span className="text-[10px] text-slate-500">
-                                  {KST_FORMATTER.format(new Date(entry.created_at))}
-                                </span>
-                                {entry.judgments && entry.judgments.length > 0 && (
-                                  <span className="text-[10px] text-amber-700 bg-amber-100 px-2 py-0.5 rounded">
-                                    판정 {entry.judgments.length}건
-                                  </span>
-                                )}
-                              </div>
-                              <div className="flex items-center gap-1">
-                                <button
-                                  onClick={() => startStoryEdit(entry)}
-                                  disabled={busyStoryLogId === entry.id}
-                                  className="text-xs px-2 py-1 rounded border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-50"
-                                >
-                                  수정
-                                </button>
-                                <button
-                                  onClick={() => deleteStoryEntry(s.id, entry.id)}
-                                  disabled={busyStoryLogId === entry.id}
-                                  className="text-xs px-2 py-1 rounded border border-red-200 bg-white text-red-600 hover:bg-red-50 disabled:opacity-50"
-                                >
-                                  삭제
-                                </button>
-                              </div>
-                            </div>
-
-                            {editingStoryLogId === entry.id ? (
-                              <div className="space-y-2">
-                                <div className="flex gap-2">
-                                  <select
-                                    value={storyEditRole}
-                                    onChange={(e) => setStoryEditRole(e.target.value as "USER" | "AI")}
-                                    className="border border-slate-300 rounded px-2 py-1 text-xs bg-white"
-                                  >
-                                    <option value="USER">USER</option>
-                                    <option value="AI">AI</option>
-                                  </select>
-                                  <button
-                                    onClick={() => saveStoryEdit(s.id, entry.id)}
-                                    disabled={busyStoryLogId === entry.id}
-                                    className="text-xs px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50"
-                                  >
-                                    저장
-                                  </button>
-                                  <button
-                                    onClick={cancelStoryEdit}
-                                    disabled={busyStoryLogId === entry.id}
-                                    className="text-xs px-2 py-1 rounded border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-50"
-                                  >
-                                    취소
-                                  </button>
-                                </div>
-                                <textarea
-                                  value={storyEditContent}
-                                  onChange={(e) => setStoryEditContent(e.target.value)}
-                                  rows={4}
-                                  className="w-full border border-slate-300 rounded px-2 py-1 text-sm resize-y bg-white"
-                                />
-                              </div>
-                            ) : (
-                              <p className="text-sm text-slate-700 whitespace-pre-wrap">{entry.content}</p>
-                            )}
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
-                )}
               </div>
             </div>
           ))
         )}
       </div>
+
+      {storySessionId && storySession && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm p-2 sm:p-6">
+          <div className="mx-auto flex h-full w-full max-w-6xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 sm:px-6">
+              <div>
+                <h4 className="text-base font-bold text-slate-800">스토리 관리</h4>
+                <p className="mt-0.5 text-xs text-slate-500">{`Session #${storySession.id} • ${storySession.title}`}</p>
+              </div>
+              <button
+                onClick={closeStoryManager}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                닫기
+              </button>
+            </div>
+
+            <div className="border-b border-slate-100 bg-slate-50/80 px-4 py-3 sm:px-6">
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <span className="text-xs text-slate-500">{`메시지 ${storyEntries.length}개`}</span>
+                <button
+                  onClick={() => loadStoryEntries(storySession.id)}
+                  disabled={storyLoading}
+                  className="rounded border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  {storyLoading ? "로딩..." : "다시 불러오기"}
+                </button>
+              </div>
+
+              <div className="rounded-lg border border-slate-200 bg-white p-3">
+                <p className="mb-2 text-xs font-semibold text-slate-600">메시지 추가</p>
+                <div className="mb-2 flex items-center gap-2">
+                  <select
+                    value={newStoryRole}
+                    onChange={(e) => setNewStoryRole(e.target.value as "USER" | "AI")}
+                    className="border border-slate-300 rounded px-2 py-1 text-xs bg-white"
+                  >
+                    <option value="USER">USER</option>
+                    <option value="AI">AI</option>
+                  </select>
+                  <button
+                    onClick={() => addStoryEntry(storySession.id)}
+                    disabled={storyActionLoading}
+                    className="rounded bg-violet-600 px-3 py-1 text-xs font-semibold text-white hover:bg-violet-700 disabled:opacity-50"
+                  >
+                    추가
+                  </button>
+                </div>
+                <textarea
+                  value={newStoryContent}
+                  onChange={(e) => setNewStoryContent(e.target.value)}
+                  rows={3}
+                  className="w-full resize-y rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+                  placeholder="추가할 스토리 메시지를 입력하세요"
+                />
+              </div>
+            </div>
+
+            <div className="flex-1 space-y-2 overflow-y-auto bg-slate-50/40 p-4 sm:px-6 sm:py-5">
+              {storyLoading ? (
+                <div className="py-10 text-center text-sm text-slate-400">스토리 불러오는 중...</div>
+              ) : storyEntries.length === 0 ? (
+                <div className="py-10 text-center text-sm text-slate-400">스토리 메시지가 없습니다.</div>
+              ) : (
+                storyEntries.map((entry) => (
+                  <div key={entry.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`rounded px-2 py-0.5 text-[10px] font-bold ${
+                            entry.role === "USER" ? "bg-blue-100 text-blue-700" : "bg-slate-200 text-slate-700"
+                          }`}
+                        >
+                          {entry.role}
+                        </span>
+                        <span className="text-[10px] text-slate-500">{KST_FORMATTER.format(new Date(entry.created_at))}</span>
+                        {entry.judgments && entry.judgments.length > 0 && (
+                          <button
+                            onClick={() => toggleJudgmentExpand(entry.id)}
+                            className="rounded bg-amber-100 px-2 py-0.5 text-[10px] text-amber-700 hover:bg-amber-200 transition-colors cursor-pointer"
+                          >
+                            행동 {entry.judgments.length}건 {expandedJudgments.has(entry.id) ? "▲" : "▼"}
+                          </button>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => startStoryEdit(entry)}
+                          disabled={busyStoryLogId === entry.id}
+                          className="rounded border border-slate-200 bg-white px-2 py-1 text-xs hover:bg-slate-100 disabled:opacity-50"
+                        >
+                          수정
+                        </button>
+                        <button
+                          onClick={() => deleteStoryEntry(storySession.id, entry.id)}
+                          disabled={busyStoryLogId === entry.id}
+                          className="rounded border border-red-200 bg-white px-2 py-1 text-xs text-red-600 hover:bg-red-50 disabled:opacity-50"
+                        >
+                          삭제
+                        </button>
+                      </div>
+                    </div>
+
+                    {editingStoryLogId === entry.id ? (
+                      <div className="space-y-2">
+                        <div className="flex flex-wrap gap-2">
+                          <select
+                            value={storyEditRole}
+                            onChange={(e) => setStoryEditRole(e.target.value as "USER" | "AI")}
+                            className="border border-slate-300 rounded px-2 py-1 text-xs bg-white"
+                          >
+                            <option value="USER">USER</option>
+                            <option value="AI">AI</option>
+                          </select>
+                          <button
+                            onClick={() => saveStoryEdit(storySession.id, entry.id)}
+                            disabled={busyStoryLogId === entry.id}
+                            className="rounded bg-emerald-600 px-2 py-1 text-xs text-white hover:bg-emerald-700 disabled:opacity-50"
+                          >
+                            저장
+                          </button>
+                          <button
+                            onClick={cancelStoryEdit}
+                            disabled={busyStoryLogId === entry.id}
+                            className="rounded border border-slate-200 bg-white px-2 py-1 text-xs hover:bg-slate-100 disabled:opacity-50"
+                          >
+                            취소
+                          </button>
+                        </div>
+                        <textarea
+                          value={storyEditContent}
+                          onChange={(e) => setStoryEditContent(e.target.value)}
+                          rows={5}
+                          className="w-full resize-y rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+                        />
+                      </div>
+                    ) : (
+                      <p className="whitespace-pre-wrap text-sm text-slate-700">{entry.content}</p>
+                    )}
+
+                    {entry.judgments && entry.judgments.length > 0 && expandedJudgments.has(entry.id) && (
+                      <div className="mt-2 space-y-1.5 border-t border-amber-100 pt-2">
+                        {entry.judgments.map((j) => (
+                          <div key={j.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded bg-amber-50/70 px-3 py-2 text-xs">
+                            <span className="font-semibold text-slate-800">{j.character_name}</span>
+                            <span className="text-slate-500 truncate max-w-[200px]" title={j.action_text}>{j.action_text}</span>
+                            {j.dice_result != null && (
+                              <span className="text-slate-600">
+                                🎲 {j.dice_result}{j.modifier !== 0 && `${j.modifier >= 0 ? "+" : ""}${j.modifier}`}{j.final_value != null && ` = ${j.final_value}`}
+                              </span>
+                            )}
+                            <span className="text-slate-400">DC {j.difficulty}</span>
+                            <span className={outcomeColor(j.outcome)}>{j.outcome ?? "-"}</span>
+                            <button
+                              onClick={() => deleteJudgmentEntry(storySession.id, j.id)}
+                              disabled={busyJudgmentId === j.id}
+                              className="ml-auto rounded border border-red-200 bg-white px-2 py-0.5 text-[10px] text-red-600 hover:bg-red-50 disabled:opacity-50"
+                            >
+                              메시지 삭제
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

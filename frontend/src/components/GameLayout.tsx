@@ -9,18 +9,19 @@ import { useAuthStore } from '../stores/authStore';
 import { useSocketStore } from '../stores/socketStore';
 import { useChatStore } from '../stores/chatStore';
 import { useAIStore } from '../stores/aiStore';
+import { useActionStore } from '../stores/actionStore';
 
 export default function GameLayout() {
   const currentSession = useGameStore((state) => state.currentSession);
   const setSession = useGameStore((state) => state.setSession);
-  const addNotification = useGameStore((state) => state.addNotification);
-  const clearNotifications = useGameStore((state) => state.clearNotifications);
   const isJudgmentModalOpen = useGameStore((state) => state.isJudgmentModalOpen);
   const setJudgmentModalOpen = useGameStore((state) => state.setJudgmentModalOpen);
   const userId = useAuthStore((state) => state.userId);
   const emit = useSocketStore((state) => state.emit);
   const socket = useSocketStore((state) => state.socket);
   const clearChat = useChatStore((state) => state.clear);
+  const setActionInputDisabled = useActionStore((state) => state.setActionInputDisabled);
+  const clearJudgments = useAIStore((state) => state.clearJudgments);
   const judgments = useAIStore((state) => state.judgments);
   const isGenerating = useAIStore((state) => state.isGenerating);
   const isHost = !!currentSession && currentSession.hostUserId === userId;
@@ -81,20 +82,10 @@ export default function GameLayout() {
       // Only handle if it's for the current session
       if (currentSession.id !== data.session_id) return;
 
-      // Show notification with reason
-      const reasonText = data.reason === 'host_disconnected'
-        ? '호스트가 연결을 끊었습니다'
-        : '모든 참가자가 나갔습니다';
-
-      addNotification({
-        type: 'alert',
-        message: `세션이 종료되었습니다: ${reasonText}`,
-        autoHide: false,
-      });
-
-      // Clear session state (but keep character selection)
+      // Session teardown (character selection is preserved).
       clearChat();
-      clearNotifications();
+      setActionInputDisabled(false);
+      clearJudgments();
       setSession(null);
       // Note: Don't clear character here - character selection should persist
       // across sessions so users can rejoin or join other sessions
@@ -108,7 +99,7 @@ export default function GameLayout() {
     return () => {
       socket.off('session_ended', handleSessionEnded);
     };
-  }, [socket, currentSession, addNotification, clearChat, clearNotifications, setSession]);
+  }, [socket, currentSession, clearChat, clearJudgments, setActionInputDisabled, setSession]);
 
   // Handle judgment modal open/close based on WebSocket events
   // Task 13: WebSocket event handler updates
@@ -124,19 +115,16 @@ export default function GameLayout() {
     // 1. judgment_ready - for the player who submitted the action
     // 2. player_action_analyzed - for other players observing
     const handleJudgmentReady = () => {
-      console.log('[GameLayout] Opening judgment modal (judgment_ready)');
       setJudgmentModalOpen(true);
     };
 
     const handlePlayerActionAnalyzed = () => {
-      console.log('[GameLayout] Opening judgment modal (player_action_analyzed)');
       setJudgmentModalOpen(true);
     };
 
     // Close modal when story generation starts (Phase 3)
     // This signals that all judgments are complete
     const handleStoryGenerationStarted = () => {
-      console.log('[GameLayout] Closing judgment modal (story_generation_started)');
       setJudgmentModalOpen(false);
     };
 
