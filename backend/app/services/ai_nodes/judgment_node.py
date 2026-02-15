@@ -18,8 +18,11 @@ from app.utils.prompt_loader import load_prompt
 logger = logging.getLogger("ai_gm.judgment_node")
 
 
-def _select_recent_story_entries(story_history: list, limit: int = 5) -> list:
-    """스토리 히스토리에서 최신 항목 limit개를 반환합니다."""
+def _select_recent_story_entries(story_history: list, limit: int | None = None) -> list:
+    """스토리 히스토리를 시간순으로 정렬하여 반환합니다.
+
+    limit이 지정되면 최신 limit개만 반환합니다.
+    """
     if not story_history:
         return []
 
@@ -28,7 +31,9 @@ def _select_recent_story_entries(story_history: list, limit: int = 5) -> list:
     if all(hasattr(entry, "created_at") for entry in entries):
         entries.sort(key=lambda entry: (getattr(entry, "created_at") is None, getattr(entry, "created_at")))
 
-    return entries[-limit:]
+    if limit is not None:
+        return entries[-limit:]
+    return entries
 
 
 def _format_story_entry(entry: object) -> str:
@@ -262,8 +267,8 @@ async def _determine_difficulty_with_ai(
         char_info_list.append(char_info)
     context_parts.append("## 캐릭터 정보\n\n" + "\n".join(char_info_list))
 
-    # 스토리 히스토리 (최근 5개만)
-    recent_history = _select_recent_story_entries(story_history, limit=5)
+    # 스토리 히스토리 (현재 막 전체 — 이전 막은 ai_summary로 압축됨)
+    recent_history = _select_recent_story_entries(story_history)
     if recent_history:
         history_texts = [_format_story_entry(entry) for entry in recent_history if entry is not None]
         if history_texts:

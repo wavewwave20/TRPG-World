@@ -138,6 +138,7 @@ class StoryLog(Base):
     act_id = Column(Integer, ForeignKey("story_acts.id"), nullable=True)
     role = Column(String(10), nullable=False)  # "USER" 또는 "AI"
     content = Column(Text, nullable=False)
+    judgments_data = Column(JSON, nullable=True)  # 판정 결과 스냅샷 (USER 메시지 전용)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 

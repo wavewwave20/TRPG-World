@@ -57,8 +57,6 @@ function addJudgmentIfNew(judgmentSetup: JudgmentSetup): void {
 export function registerJudgmentHandlers(socket: Socket) {
   // Judgment ready - receive single judgment setup for the player
   socket.on('judgment_ready', (data: RawJudgmentData & { session_id: number }) => {
-    console.log('Judgment ready:', data);
-
     const currentCharacter = useGameStore.getState().currentCharacter;
     const characterName = currentCharacter?.name || `Character ${data.character_id}`;
 
@@ -81,8 +79,6 @@ export function registerJudgmentHandlers(socket: Socket) {
     session_id: number;
     character_name: string;
   }) => {
-    console.log('Player action analyzed:', data);
-
     const judgmentSetup = createJudgmentSetup(
       data,
       data.character_name,
@@ -101,21 +97,32 @@ export function registerJudgmentHandlers(socket: Socket) {
 
   // Next judgment - move to next judgment in sequence
   socket.on('next_judgment', (data: { judgment_index: number }) => {
-    console.log('Next judgment:', data);
-
     const aiStateBefore = useAIStore.getState();
-    if (aiStateBefore.ackRequiredForActionId !== null) {
-      useAIStore.getState().setPendingNextIndex(data.judgment_index);
+    const currentIndex = aiStateBefore.currentJudgmentIndex;
+    const pendingIndex = aiStateBefore.pendingNextIndex;
+    const requestedIndex = data.judgment_index;
+
+    // Ignore stale/duplicate transitions that would regress the sequence.
+    if (requestedIndex <= currentIndex) {
+      return;
+    }
+    if (pendingIndex !== null && requestedIndex <= pendingIndex) {
       return;
     }
 
-    useAIStore.getState().setCurrentJudgmentIndex(data.judgment_index);
+    if (aiStateBefore.ackRequiredForActionId !== null) {
+      useAIStore.getState().setPendingNextIndex(requestedIndex);
+      return;
+    }
+
+    useAIStore.getState().setCurrentJudgmentIndex(requestedIndex);
 
     const aiState = useAIStore.getState();
+    const clampedIndex = Math.min(requestedIndex, Math.max(aiState.judgments.length - 1, 0));
     const updatedJudgments = aiState.judgments.map((judgment, index) => {
-      if (index < data.judgment_index) {
+      if (index < clampedIndex) {
         return { ...judgment, status: 'complete' as const };
-      } else if (index === data.judgment_index) {
+      } else if (index === clampedIndex) {
         return { ...judgment, status: 'active' as const };
       } else {
         return { ...judgment, status: 'waiting' as const };
@@ -126,7 +133,6 @@ export function registerJudgmentHandlers(socket: Socket) {
 
   // Dice rolling - show animation to all participants
   socket.on('dice_rolling', (data: { action_id: number }) => {
-    console.log('Dice rolling:', data);
     useAIStore.getState().setJudgmentRolling(data.action_id);
   });
 
@@ -143,8 +149,6 @@ export function registerJudgmentHandlers(socket: Socket) {
     outcome: 'critical_failure' | 'failure' | 'success' | 'critical_success' | 'auto_success';
     requires_roll?: boolean;
   }) => {
-    console.log('Dice rolled:', data);
-
     const isAutoSuccess = data.outcome === 'auto_success';
 
     useAIStore.getState().updateJudgmentResult(data.judgment_id, {
@@ -180,9 +184,26 @@ export function registerJudgmentHandlers(socket: Socket) {
     });
   });
 
+  // Dice roll error - recover local state and surface clear feedback
+  socket.on('dice_roll_error', (data: {
+    session_id?: number;
+    character_id?: number;
+    judgment_id?: number;
+    error?: string;
+  }) => {
+    const errorMessage = data.error || '주사위 처리 중 오류가 발생했습니다.';
+
+    if (data.judgment_id) {
+      useAIStore.getState().updateJudgmentResult(data.judgment_id, {
+        status: 'active',
+      });
+    }
+
+    useGameStore.getState().addError(errorMessage);
+  });
+
   // All dice rolled
-  socket.on('all_dice_rolled', (data: { session_id: number }) => {
-    console.log('All dice rolled:', data);
+  socket.on('all_dice_rolled', () => {
     useGameStore.getState().addNotification({
       type: 'system',
       message: '모든 플레이어가 주사위를 굴렸습니다. 스토리가 생성됩니다...',
@@ -190,17 +211,7 @@ export function registerJudgmentHandlers(socket: Socket) {
   });
 
   // Judgments ready - pre-rolling complete
-  socket.on('judgments_ready', (data: {
-    session_id: number;
-    analyses: Array<{
-      character_id: number;
-      action_text: string;
-      modifier: number;
-      difficulty: number;
-      difficulty_reasoning: string;
-    }>;
-  }) => {
-    console.log('Judgments ready (pre-rolled):', data);
+  socket.on('judgments_ready', () => {
     useGameStore.getState().addNotification({
       type: 'system',
       message: '판정 준비 완료! 주사위를 확인하세요.',

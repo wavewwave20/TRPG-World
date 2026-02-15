@@ -7,6 +7,7 @@ import CompletedJudgmentsList from './CompletedJudgmentsList';
 import WaitingIndicator from './WaitingIndicator';
 import { useAIStore } from '../stores/aiStore';
 import { useGameStore } from '../stores/gameStore';
+import { useAuthStore } from '../stores/authStore';
 import { useSocketStore } from '../stores/socketStore';
 import type { JudgmentResult, JudgmentSetup } from '../types/judgment';
 import './JudgmentModal.css';
@@ -38,8 +39,11 @@ function JudgmentModal({ isOpen, onClose, sessionId }: JudgmentModalProps) {
 
   // Get current judgment safely
   const currentJudgment = judgments[currentJudgmentIndex] ?? null;
+  const currentSession = useGameStore((state) => state.currentSession);
   const currentCharacter = useGameStore((state) => state.currentCharacter);
+  const currentUserId = useAuthStore((state) => state.userId);
   const isCurrentPlayer = !!(currentJudgment && currentCharacter && currentJudgment.character_id === currentCharacter.id);
+  const isHost = !!currentSession && currentSession.hostUserId === currentUserId;
 
   // Memoize canClose calculation
   const canClose = useMemo(() => {
@@ -115,7 +119,9 @@ function JudgmentModal({ isOpen, onClose, sessionId }: JudgmentModalProps) {
       judgment_id: actionId,
       dice_result: diceResult
     };
-    
+
+    // Prevent duplicate roll submissions while waiting for server response
+    useAIStore.getState().setJudgmentRolling(actionId);
     console.log('🔌 Socket emit:', 'roll_dice', payload);
     emit('roll_dice', payload);
   }, [emit, currentJudgment, sessionId]);
@@ -124,6 +130,10 @@ function JudgmentModal({ isOpen, onClose, sessionId }: JudgmentModalProps) {
     const state = useAIStore.getState();
     const pending = state.pendingNextIndex;
     if (pending !== null) {
+      if (pending <= state.currentJudgmentIndex) {
+        useAIStore.setState({ pendingNextIndex: null, ackRequiredForActionId: null });
+        return;
+      }
       // Apply the pending transition (server already advanced); just catch up locally
       state.setCurrentJudgmentIndex(pending);
       // Update statuses accordingly
@@ -136,8 +146,9 @@ function JudgmentModal({ isOpen, onClose, sessionId }: JudgmentModalProps) {
     } else {
       // Ask server to move next (fallback if server hasn't advanced yet)
       if (currentJudgment) {
-        emit('next_judgment', { session_id: sessionId, current_index: currentJudgmentIndex });
+        // Clear local ack first to avoid race with fast next_judgment broadcast.
         try { useAIStore.getState().setAckRequired(null); } catch {}
+        emit('next_judgment', { session_id: sessionId, current_index: currentJudgmentIndex });
       }
     }
   }, [emit, currentJudgment, currentJudgmentIndex, sessionId]);
@@ -145,6 +156,14 @@ function JudgmentModal({ isOpen, onClose, sessionId }: JudgmentModalProps) {
   const handleTriggerStory = useCallback(() => {
     // **NEW: Request narrative stream (optimized flow)**
     emit('request_narrative_stream', { session_id: sessionId });
+  }, [emit, sessionId]);
+
+  const handleForceProgress = useCallback(() => {
+    const confirmed = window.confirm(
+      '아직 완료되지 않은 판정을 모두 확정하고 이야기를 진행할까요?'
+    );
+    if (!confirmed) return;
+    emit('request_narrative_stream', { session_id: sessionId, force: true });
   }, [emit, sessionId]);
 
   const handleOverlayClick = useCallback((e: React.MouseEvent) => {
@@ -185,6 +204,11 @@ function JudgmentModal({ isOpen, onClose, sessionId }: JudgmentModalProps) {
   const progressAnnouncement = useMemo(() => {
     return `판정 진행 상황: ${currentJudgmentIndex + 1}번째 판정, 총 ${judgments.length}개 중`;
   }, [currentJudgmentIndex, judgments.length]);
+
+  const canForceProgress = useMemo(() => {
+    if (!isHost || canClose) return false;
+    return judgments.some((j) => j.status === 'active' || j.status === 'waiting' || j.status === 'rolling');
+  }, [isHost, canClose, judgments]);
 
   // Handle modal visibility with animation
   useEffect(() => {
@@ -298,6 +322,7 @@ function JudgmentModal({ isOpen, onClose, sessionId }: JudgmentModalProps) {
         <FocusTrap
           focusTrapOptions={{
             initialFocus: false,
+            fallbackFocus: () => modalContentRef.current || document.body,
             allowOutsideClick: true,
             escapeDeactivates: false,
             returnFocusOnDeactivate: true,
@@ -307,6 +332,7 @@ function JudgmentModal({ isOpen, onClose, sessionId }: JudgmentModalProps) {
             ref={modalContentRef}
             className={contentClasses}
             onClick={handleContentClick}
+            tabIndex={-1}
             role="dialog"
             aria-modal="true"
             aria-labelledby="judgment-modal-title"
@@ -334,6 +360,16 @@ function JudgmentModal({ isOpen, onClose, sessionId }: JudgmentModalProps) {
               
               {waitingJudgments.length > 0 && (
                 <WaitingIndicator waitingJudgments={waitingJudgments} />
+              )}
+
+              {canForceProgress && (
+                <button
+                  type="button"
+                  onClick={handleForceProgress}
+                  className="w-full rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800 transition-colors hover:bg-amber-100"
+                >
+                  방장 강제 진행 (건너뛰기)
+                </button>
               )}
               
               {completedJudgments.length > 0 && (
