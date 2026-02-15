@@ -275,3 +275,49 @@ class DiceRollState(Base):
     dice_result = Column(Integer, nullable=True)
     has_rolled = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class LLMApiKey(Base):
+    """
+    프로바이더별 API 키를 저장하는 모델.
+
+    속성:
+        id: 고유 식별자
+        provider: 프로바이더 식별자 (openai, gemini, anthropic)
+        provider_display: 표시명 (OpenAI, Google Gemini, Anthropic)
+        api_key_encrypted: Fernet으로 암호화된 API 키
+        created_at: 생성 시각
+        updated_at: 수정 시각
+    """
+
+    __tablename__ = "llm_api_keys"
+
+    id = Column(Integer, primary_key=True, index=True)
+    provider = Column(String(50), unique=True, nullable=False)
+    provider_display = Column(String(100), nullable=False)
+    api_key_encrypted = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class LLMModel(Base):
+    """
+    등록된 LLM 모델을 나타내는 모델.
+
+    속성:
+        id: 고유 식별자
+        provider: 프로바이더 식별자 (llm_api_keys.provider 참조)
+        model_id: LiteLLM 형식 모델 식별자 (예: "gpt-4o", "gemini/gemini-2.5-flash")
+        display_name: 사용자 표시명
+        is_active: 현재 활성 모델 여부 (한 번에 하나만 활성)
+        created_at: 생성 시각
+    """
+
+    __tablename__ = "llm_models"
+
+    id = Column(Integer, primary_key=True, index=True)
+    provider = Column(String(50), nullable=False)
+    model_id = Column(String(200), nullable=False, unique=True)
+    display_name = Column(String(200), nullable=False)
+    is_active = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

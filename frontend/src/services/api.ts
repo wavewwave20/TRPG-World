@@ -444,3 +444,121 @@ export async function getCharacter(
     method: 'GET',
   });
 }
+
+// ============================================================================
+// LLM Settings Types and API Functions (Admin)
+// ============================================================================
+
+export interface ApiKeyResponse {
+  provider: string;
+  provider_display: string;
+  api_key_masked: string;
+  updated_at: string;
+}
+
+export interface ModelResponse {
+  id: number;
+  provider: string;
+  model_id: string;
+  display_name: string;
+  is_active: boolean;
+  has_api_key: boolean;
+  created_at: string;
+}
+
+export interface LLMSettingsResponse {
+  api_keys: ApiKeyResponse[];
+  models: ModelResponse[];
+  active_model: ModelResponse | null;
+  active_source: string;
+  env_model: string | null;
+}
+
+export interface LLMTestResult {
+  success: boolean;
+  message: string;
+}
+
+// --- Overview ---
+
+export async function getLLMSettings(userId: number): Promise<LLMSettingsResponse> {
+  const url = `${API_BASE_URL}/api/llm-settings/?user_id=${userId}`;
+  return fetchWithErrorHandling<LLMSettingsResponse>(url);
+}
+
+// --- API Keys ---
+
+export async function setApiKey(
+  userId: number,
+  provider: string,
+  apiKey: string
+): Promise<ApiKeyResponse> {
+  const url = `${API_BASE_URL}/api/llm-settings/api-keys/${provider}?user_id=${userId}`;
+  return fetchWithErrorHandling<ApiKeyResponse>(url, {
+    method: 'PUT',
+    body: JSON.stringify({ api_key: apiKey }),
+  });
+}
+
+export async function deleteApiKey(
+  userId: number,
+  provider: string
+): Promise<{ message: string }> {
+  const url = `${API_BASE_URL}/api/llm-settings/api-keys/${provider}?user_id=${userId}`;
+  return fetchWithErrorHandling<{ message: string }>(url, {
+    method: 'DELETE',
+  });
+}
+
+// --- Models ---
+
+export async function addModel(
+  userId: number,
+  data: { provider: string; model_id: string; display_name: string }
+): Promise<ModelResponse> {
+  const url = `${API_BASE_URL}/api/llm-settings/models?user_id=${userId}`;
+  return fetchWithErrorHandling<ModelResponse>(url, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function removeModel(
+  userId: number,
+  modelId: number
+): Promise<{ message: string }> {
+  const url = `${API_BASE_URL}/api/llm-settings/models/${modelId}?user_id=${userId}`;
+  return fetchWithErrorHandling<{ message: string }>(url, {
+    method: 'DELETE',
+  });
+}
+
+export async function activateModel(
+  userId: number,
+  modelId: number
+): Promise<ModelResponse> {
+  const url = `${API_BASE_URL}/api/llm-settings/models/${modelId}/activate?user_id=${userId}`;
+  return fetchWithErrorHandling<ModelResponse>(url, {
+    method: 'POST',
+  });
+}
+
+export async function deactivateModel(
+  userId: number,
+  modelId: number
+): Promise<ModelResponse> {
+  const url = `${API_BASE_URL}/api/llm-settings/models/${modelId}/deactivate?user_id=${userId}`;
+  return fetchWithErrorHandling<ModelResponse>(url, {
+    method: 'POST',
+  });
+}
+
+export async function testModelConnection(
+  userId: number,
+  modelId: number
+): Promise<LLMTestResult> {
+  const url = `${API_BASE_URL}/api/llm-settings/models/${modelId}/test?user_id=${userId}`;
+  return fetchWithErrorHandling<LLMTestResult>(url, {
+    method: 'POST',
+  });
+}
