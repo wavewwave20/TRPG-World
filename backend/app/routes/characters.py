@@ -1,6 +1,8 @@
 """캐릭터 관리 API 라우트."""
 
-from datetime import datetime
+import secrets
+from copy import deepcopy
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,9 +10,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Character, User
+from app.models import Character, CharacterShareCode, User
 
 router = APIRouter(prefix="/api/characters", tags=["characters"])
+SHARE_CODE_EXPIRE_MINUTES = 3
 
 
 class CharacterCreate(BaseModel):
@@ -118,6 +121,71 @@ class CharacterResponse(BaseModel):
                 "created_at": "2025-12-15T10:30:00",
             }
         }
+
+
+class CharacterShareCodeCreateRequest(BaseModel):
+    """Request model for creating a character share code."""
+
+    user_id: int = Field(..., description="ID of the user who owns the character")
+
+
+class CharacterShareCodeCreateResponse(BaseModel):
+    """Response model for character share code creation."""
+
+    share_code: str
+    character_id: int
+    character_name: str
+    created_at: str
+
+
+class CharacterShareCodeRedeemRequest(BaseModel):
+    """Request model for redeeming a character share code."""
+
+    user_id: int = Field(..., description="ID of the user receiving the shared character")
+    share_code: str = Field(..., description="9-digit numeric share code")
+
+
+class CharacterShareCodeRedeemResponse(BaseModel):
+    """Response model for successful share code redemption."""
+
+    message: str
+    character: CharacterResponse
+
+
+def _generate_unique_share_code(db: Session) -> str:
+    """Generate a unique 9-digit numeric share code."""
+    for _ in range(30):
+        code = f"{secrets.randbelow(900_000_000) + 100_000_000:09d}"
+        existing = db.query(CharacterShareCode).filter(CharacterShareCode.code == code).first()
+        if not existing:
+            return code
+    raise HTTPException(status_code=500, detail="Failed to generate unique share code")
+
+
+def _build_shared_character_name(db: Session, target_user_id: int, source_name: str) -> str:
+    """Build a non-conflicting character name for shared character import."""
+    base_name = source_name.strip()
+    same_name_exists = (
+        db.query(Character).filter(Character.user_id == target_user_id, Character.name == base_name).first()
+        is not None
+    )
+    if not same_name_exists:
+        return base_name
+
+    shared_name = f"{base_name} (공유본)"
+    suffix = 2
+    while (
+        db.query(Character).filter(Character.user_id == target_user_id, Character.name == shared_name).first()
+        is not None
+    ):
+        shared_name = f"{base_name} (공유본 {suffix})"
+        suffix += 1
+    return shared_name
+
+
+def _is_share_code_expired(share_entry: CharacterShareCode) -> bool:
+    """Return True when share code is older than configured TTL."""
+    return datetime.utcnow() > share_entry.created_at + timedelta(minutes=SHARE_CODE_EXPIRE_MINUTES)
 
 
 @router.get("/{character_id}", response_model=CharacterResponse)
@@ -323,3 +391,195 @@ def delete_character(character_id: int, db: Session = Depends(get_db)):
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to delete character: {e!s}")
+
+
+@router.post("/{character_id}/share-code", response_model=CharacterShareCodeCreateResponse, status_code=201)
+def create_character_share_code(
+    character_id: int,
+    payload: CharacterShareCodeCreateRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Create a one-time share code for a character.
+
+    Args:
+        character_id: Character ID to share
+        payload: Request payload with owner user_id
+        db: Database session
+
+    Returns:
+        9-digit share code
+
+    Raises:
+        HTTPException 404: If character not found
+        HTTPException 403: If user does not own the character
+    """
+    character = db.query(Character).filter(Character.id == character_id).first()
+    if not character:
+        raise HTTPException(status_code=404, detail=f"Character with id {character_id} not found")
+
+    if character.user_id != payload.user_id:
+        raise HTTPException(status_code=403, detail="You can only share your own character")
+
+    try:
+        share_code = _generate_unique_share_code(db)
+        now = datetime.utcnow()
+        share_entry = CharacterShareCode(
+            code=share_code,
+            source_character_id=character.id,
+            source_user_id=character.user_id,
+            created_at=now,
+        )
+
+        db.add(share_entry)
+        db.commit()
+        db.refresh(share_entry)
+
+        return CharacterShareCodeCreateResponse(
+            share_code=share_entry.code,
+            character_id=character.id,
+            character_name=character.name,
+            created_at=share_entry.created_at.isoformat(),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to create share code: {e!s}")
+
+
+@router.post("/share/redeem", response_model=CharacterShareCodeRedeemResponse, status_code=201)
+def redeem_character_share_code(payload: CharacterShareCodeRedeemRequest, db: Session = Depends(get_db)):
+    """
+    Redeem a character share code and clone the character to the recipient.
+
+    Args:
+        payload: recipient user_id and 9-digit share code
+        db: Database session
+
+    Returns:
+        Newly created shared character for recipient
+
+    Raises:
+        HTTPException 400: Invalid/used share code or self-redemption
+        HTTPException 404: User/share code/source character not found
+    """
+    target_user = db.query(User).filter(User.id == payload.user_id).first()
+    if not target_user:
+        raise HTTPException(status_code=404, detail=f"User with id {payload.user_id} not found")
+
+    share_code = payload.share_code.strip()
+    if not share_code.isdigit() or len(share_code) != 9:
+        raise HTTPException(status_code=400, detail="Share code must be a 9-digit number")
+
+    share_entry = db.query(CharacterShareCode).filter(CharacterShareCode.code == share_code).first()
+    if not share_entry:
+        raise HTTPException(status_code=404, detail="Share code not found")
+
+    if share_entry.redeemed_at is not None:
+        raise HTTPException(status_code=400, detail="Share code has already been used")
+
+    if _is_share_code_expired(share_entry):
+        raise HTTPException(status_code=400, detail=f"Share code has expired (valid for {SHARE_CODE_EXPIRE_MINUTES} minutes)")
+
+    if share_entry.source_user_id == payload.user_id:
+        raise HTTPException(status_code=400, detail="You cannot redeem your own share code")
+
+    source_character = db.query(Character).filter(Character.id == share_entry.source_character_id).first()
+    if not source_character:
+        raise HTTPException(status_code=404, detail="Source character not found")
+
+    try:
+        cloned_name = _build_shared_character_name(db, payload.user_id, source_character.name)
+        new_character = Character(
+            user_id=payload.user_id,
+            name=cloned_name,
+            data=deepcopy(source_character.data or {}),
+            created_at=datetime.utcnow(),
+        )
+        db.add(new_character)
+
+        share_entry.redeemed_by_user_id = payload.user_id
+        share_entry.redeemed_at = datetime.utcnow()
+
+        db.commit()
+        db.refresh(new_character)
+
+        character_response = CharacterResponse(
+            id=new_character.id,
+            user_id=new_character.user_id,
+            name=new_character.name,
+            data=new_character.data,
+            created_at=new_character.created_at.isoformat(),
+        )
+
+        return CharacterShareCodeRedeemResponse(
+            message="Character shared successfully",
+            character=character_response,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to redeem share code: {e!s}")
+
+
+@router.post("/{character_id}/duplicate", response_model=CharacterResponse, status_code=201)
+def duplicate_character(character_id: int, db: Session = Depends(get_db)):
+    """
+    Duplicate a character with all profile data.
+
+    Args:
+        character_id: Source character ID
+        db: Database session
+
+    Returns:
+        Newly duplicated character
+
+    Raises:
+        HTTPException 404: If source character not found
+    """
+    source_character = db.query(Character).filter(Character.id == character_id).first()
+
+    if not source_character:
+        raise HTTPException(status_code=404, detail=f"Character with id {character_id} not found")
+
+    try:
+        base_name = source_character.name.strip()
+        duplicated_name = f"{base_name} (복제본)"
+        suffix = 2
+
+        while (
+            db.query(Character)
+            .filter(Character.user_id == source_character.user_id, Character.name == duplicated_name)
+            .first()
+            is not None
+        ):
+            duplicated_name = f"{base_name} (복제본 {suffix})"
+            suffix += 1
+
+        new_character = Character(
+            user_id=source_character.user_id,
+            name=duplicated_name,
+            data=deepcopy(source_character.data or {}),
+            created_at=datetime.utcnow(),
+        )
+
+        db.add(new_character)
+        db.commit()
+        db.refresh(new_character)
+
+        return CharacterResponse(
+            id=new_character.id,
+            user_id=new_character.user_id,
+            name=new_character.name,
+            data=new_character.data,
+            created_at=new_character.created_at.isoformat(),
+        )
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to duplicate character: {e!s}")

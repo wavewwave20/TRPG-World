@@ -6,7 +6,7 @@ skills/weaknesses persistence, and error handling for the
 /api/characters endpoints.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 from fastapi import FastAPI
@@ -16,7 +16,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
-from app.models import Character, User
+from app.models import Character, CharacterShareCode, User
 from app.routes.characters import router
 
 TEST_DATABASE_URL = "sqlite:///:memory:"
@@ -837,6 +837,218 @@ class TestUpdateCharacterValidation:
         response = client.put(f"/api/characters/{char.id}", json={})
 
         assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# DUPLICATE (POST /api/characters/{character_id}/duplicate)
+# ---------------------------------------------------------------------------
+
+
+class TestDuplicateCharacter:
+    """Tests for POST /api/characters/{character_id}/duplicate."""
+
+    def test_duplicate_character_success(self, client, db_session, sample_user):
+        """Duplicating an existing character returns 201 and copied data."""
+        original_data = {
+            "age": 33,
+            "race": "Elf",
+            "concept": "Scout",
+            "strength": 12,
+            "dexterity": 17,
+            "constitution": 11,
+            "intelligence": 13,
+            "wisdom": 14,
+            "charisma": 9,
+            "skills": [{"type": "active", "name": "Rapid Shot", "description": "Two quick arrows"}],
+            "weaknesses": ["Pride"],
+            "status_effects": [{"name": "Blessed", "modifier": 2}],
+            "inventory": ["Bow", "Cloak"],
+        }
+        original = _create_character_via_db(db_session, sample_user, name="Ranger", data=original_data)
+
+        response = client.post(f"/api/characters/{original.id}/duplicate")
+
+        assert response.status_code == 201
+        body = response.json()
+        assert body["id"] != original.id
+        assert body["user_id"] == original.user_id
+        assert body["name"] == "Ranger (복제본)"
+        assert body["data"] == original_data
+
+    def test_duplicate_character_not_found(self, client):
+        """Duplicating a non-existent character returns 404."""
+        response = client.post("/api/characters/99999/duplicate")
+
+        assert response.status_code == 404
+        assert "not found" in response.json()["detail"]
+
+    def test_duplicate_character_uses_incremented_name_if_needed(self, client, db_session, sample_user):
+        """Duplicate name gets a numeric suffix when base duplicate name already exists."""
+        original = _create_character_via_db(db_session, sample_user, name="Mage")
+        _create_character_via_db(db_session, sample_user, name="Mage (복제본)")
+
+        response = client.post(f"/api/characters/{original.id}/duplicate")
+
+        assert response.status_code == 201
+        assert response.json()["name"] == "Mage (복제본 2)"
+
+
+# ---------------------------------------------------------------------------
+# SHARE CODE (POST /api/characters/{character_id}/share-code, /api/characters/share/redeem)
+# ---------------------------------------------------------------------------
+
+
+class TestCharacterShareCode:
+    """Tests for character share code creation and redemption."""
+
+    def test_create_share_code_success(self, client, db_session, sample_user):
+        """Owner can create a 9-digit share code."""
+        char = _create_character_via_db(db_session, sample_user, name="Sharable Hero")
+
+        response = client.post(f"/api/characters/{char.id}/share-code", json={"user_id": sample_user.id})
+
+        assert response.status_code == 201
+        body = response.json()
+        assert body["character_id"] == char.id
+        assert body["character_name"] == "Sharable Hero"
+        assert len(body["share_code"]) == 9
+        assert body["share_code"].isdigit()
+
+    def test_create_share_code_requires_owner(self, client, db_session, sample_user, second_user):
+        """Non-owner cannot create share code for someone else's character."""
+        char = _create_character_via_db(db_session, sample_user, name="Private Hero")
+
+        response = client.post(f"/api/characters/{char.id}/share-code", json={"user_id": second_user.id})
+
+        assert response.status_code == 403
+
+    def test_redeem_share_code_success(self, client, db_session, sample_user, second_user):
+        """Recipient can redeem share code and receives a cloned character."""
+        source_data = {
+            "age": 27,
+            "race": "Human",
+            "concept": "Swordsman",
+            "strength": 15,
+            "dexterity": 12,
+            "constitution": 13,
+            "intelligence": 9,
+            "wisdom": 10,
+            "charisma": 11,
+            "skills": [{"type": "active", "name": "Slash", "description": "Basic slash"}],
+            "weaknesses": ["Impatient"],
+            "status_effects": [],
+            "inventory": ["Sword"],
+        }
+        source_char = _create_character_via_db(db_session, sample_user, name="Source Hero", data=source_data)
+
+        create_resp = client.post(
+            f"/api/characters/{source_char.id}/share-code",
+            json={"user_id": sample_user.id},
+        )
+        share_code = create_resp.json()["share_code"]
+
+        redeem_resp = client.post(
+            "/api/characters/share/redeem",
+            json={"user_id": second_user.id, "share_code": share_code},
+        )
+
+        assert redeem_resp.status_code == 201
+        redeemed = redeem_resp.json()["character"]
+        assert redeemed["user_id"] == second_user.id
+        assert redeemed["name"] == "Source Hero"
+        assert redeemed["data"] == source_data
+        assert redeemed["id"] != source_char.id
+
+    def test_redeem_share_code_cannot_be_used_twice(self, client, db_session, sample_user, second_user):
+        """Share codes are one-time and cannot be redeemed again."""
+        source_char = _create_character_via_db(db_session, sample_user, name="One Time Hero")
+
+        create_resp = client.post(
+            f"/api/characters/{source_char.id}/share-code",
+            json={"user_id": sample_user.id},
+        )
+        share_code = create_resp.json()["share_code"]
+
+        first_redeem = client.post(
+            "/api/characters/share/redeem",
+            json={"user_id": second_user.id, "share_code": share_code},
+        )
+        assert first_redeem.status_code == 201
+
+        second_redeem = client.post(
+            "/api/characters/share/redeem",
+            json={"user_id": second_user.id, "share_code": share_code},
+        )
+        assert second_redeem.status_code == 400
+        assert "already been used" in second_redeem.json()["detail"]
+
+    def test_redeem_share_code_expired(self, client, db_session, sample_user, second_user):
+        """Share code expires after 3 minutes and cannot be redeemed."""
+        source_char = _create_character_via_db(db_session, sample_user, name="Expired Hero")
+        create_resp = client.post(
+            f"/api/characters/{source_char.id}/share-code",
+            json={"user_id": sample_user.id},
+        )
+        share_code = create_resp.json()["share_code"]
+
+        share_entry = db_session.query(CharacterShareCode).filter(CharacterShareCode.code == share_code).first()
+        assert share_entry is not None
+        share_entry.created_at = datetime.utcnow() - timedelta(minutes=4)
+        db_session.commit()
+
+        response = client.post(
+            "/api/characters/share/redeem",
+            json={"user_id": second_user.id, "share_code": share_code},
+        )
+
+        assert response.status_code == 400
+        assert "expired" in response.json()["detail"]
+
+    def test_redeem_share_code_rejects_invalid_format(self, client, sample_user):
+        """Share code must be exactly a 9-digit number."""
+        response = client.post(
+            "/api/characters/share/redeem",
+            json={"user_id": sample_user.id, "share_code": "12ab"},
+        )
+
+        assert response.status_code == 400
+        assert "9-digit" in response.json()["detail"]
+
+    def test_redeem_share_code_rejects_self_redeem(self, client, db_session, sample_user):
+        """Owner cannot redeem their own share code."""
+        source_char = _create_character_via_db(db_session, sample_user, name="Self Hero")
+        create_resp = client.post(
+            f"/api/characters/{source_char.id}/share-code",
+            json={"user_id": sample_user.id},
+        )
+        share_code = create_resp.json()["share_code"]
+
+        response = client.post(
+            "/api/characters/share/redeem",
+            json={"user_id": sample_user.id, "share_code": share_code},
+        )
+
+        assert response.status_code == 400
+        assert "cannot redeem your own" in response.json()["detail"]
+
+    def test_redeem_share_code_resolves_name_collision(self, client, db_session, sample_user, second_user):
+        """If recipient already has same name, shared copy gets '(공유본)' suffix."""
+        source_char = _create_character_via_db(db_session, sample_user, name="Duplicate Name")
+        _create_character_via_db(db_session, second_user, name="Duplicate Name")
+
+        create_resp = client.post(
+            f"/api/characters/{source_char.id}/share-code",
+            json={"user_id": sample_user.id},
+        )
+        share_code = create_resp.json()["share_code"]
+
+        response = client.post(
+            "/api/characters/share/redeem",
+            json={"user_id": second_user.id, "share_code": share_code},
+        )
+
+        assert response.status_code == 201
+        assert response.json()["character"]["name"] == "Duplicate Name (공유본)"
 
 
 # ---------------------------------------------------------------------------

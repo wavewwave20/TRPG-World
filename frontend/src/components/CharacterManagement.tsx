@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuthStore } from '../stores/authStore';
+import { useGameStore } from '../stores/gameStore';
 import type { Character as BaseCharacter, Skill as BaseSkill, AbilityKey } from '../types/character';
 import { ABILITY_LABELS, ABILITY_SHORT_LABELS } from '../types/character';
 
@@ -70,10 +71,17 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
   const [newWeakness, setNewWeakness] = useState('');
   
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [duplicatingCharacterId, setDuplicatingCharacterId] = useState<number | null>(null);
+  const [shareCodeInput, setShareCodeInput] = useState('');
+  const [latestShareCode, setLatestShareCode] = useState<{ characterName: string; code: string } | null>(null);
+  const [sharingCharacterId, setSharingCharacterId] = useState<number | null>(null);
+  const [redeemingShareCode, setRedeemingShareCode] = useState(false);
   
   const userId = useAuthStore((state) => state.userId);
   const username = useAuthStore((state) => state.username);
   const logout = useAuthStore((state) => state.logout);
+  const currentCharacter = useGameStore((state) => state.currentCharacter);
 
   useEffect(() => {
     loadCharacters();
@@ -98,6 +106,7 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setNotice('');
 
     try {
       const response = await fetch(`${API_BASE_URL}/api/characters/`, {
@@ -128,6 +137,7 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
       await loadCharacters();
       resetForm();
       setShowCreateForm(false);
+      setNotice('캐릭터가 생성되었습니다.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create character');
     }
@@ -137,6 +147,7 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
     e.preventDefault();
     if (!editingCharacter) return;
     setError('');
+    setNotice('');
 
     try {
       const response = await fetch(`${API_BASE_URL}/api/characters/${editingCharacter.id}`, {
@@ -166,6 +177,7 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
       await loadCharacters();
       resetForm();
       setEditingCharacter(null);
+      setNotice('캐릭터가 수정되었습니다.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update character');
     }
@@ -173,6 +185,8 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
 
   const handleDelete = async (characterId: number) => {
     if (!confirm('Are you sure you want to delete this character?')) return;
+    setError('');
+    setNotice('');
 
     try {
       const response = await fetch(`${API_BASE_URL}/api/characters/${characterId}`, {
@@ -181,9 +195,102 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
 
       if (response.ok) {
         await loadCharacters();
+        setNotice('캐릭터가 삭제되었습니다.');
       }
     } catch (err) {
       console.error('Failed to delete character:', err);
+      setError('Failed to delete character');
+    }
+  };
+
+  const handleDuplicate = async (characterId: number) => {
+    setError('');
+    setNotice('');
+    setDuplicatingCharacterId(characterId);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/characters/${characterId}/duplicate`, {
+        method: 'POST',
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.detail || 'Failed to duplicate character');
+      }
+
+      await loadCharacters();
+      setNotice('캐릭터가 복제되었습니다.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to duplicate character');
+    } finally {
+      setDuplicatingCharacterId(null);
+    }
+  };
+
+  const handleCreateShareCode = async (characterId: number) => {
+    if (!userId) return;
+    setError('');
+    setNotice('');
+    setSharingCharacterId(characterId);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/characters/${characterId}/share-code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: userId }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.detail || 'Failed to create share code');
+      }
+
+      const data = await response.json();
+      setLatestShareCode({
+        characterName: data.character_name,
+        code: data.share_code,
+      });
+      setNotice('공유 코드가 생성되었습니다. 3분 내에 입력해야 합니다.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create share code');
+    } finally {
+      setSharingCharacterId(null);
+    }
+  };
+
+  const handleRedeemShareCode = async () => {
+    if (!userId) return;
+
+    const normalizedCode = shareCodeInput.trim();
+    if (!/^\d{9}$/.test(normalizedCode)) {
+      setError('공유 코드는 9자리 숫자여야 합니다.');
+      return;
+    }
+
+    setError('');
+    setNotice('');
+    setRedeemingShareCode(true);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/characters/share/redeem`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: userId, share_code: normalizedCode }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.detail || 'Failed to redeem share code');
+      }
+
+      const data = await response.json();
+      await loadCharacters();
+      setShareCodeInput('');
+      setNotice(`"${data.character.name}" 캐릭터를 공유받았습니다.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to redeem share code');
+    } finally {
+      setRedeemingShareCode(false);
     }
   };
 
@@ -206,6 +313,7 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
     setNewSkillAbility('');
     setNewWeakness('');
     setError('');
+    setNotice('');
   };
 
   const startEdit = (character: Character) => {
@@ -263,6 +371,17 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
 
   const calculateModifier = (score: number): number => {
     return Math.floor((score - 10) / 2);
+  };
+
+  const actionButtonBase =
+    'inline-flex w-full items-center justify-center rounded-md border px-2.5 py-2 text-[11px] sm:text-xs font-semibold tracking-wide transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 disabled:opacity-45 disabled:cursor-not-allowed';
+  const actionButtonStyle = {
+    select: `${actionButtonBase} border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 focus-visible:ring-emerald-300`,
+    selected: `${actionButtonBase} border-emerald-400 bg-emerald-200 text-emerald-900 shadow-sm`,
+    edit: `${actionButtonBase} border-slate-300 bg-white text-slate-700 hover:bg-slate-50 focus-visible:ring-slate-300`,
+    duplicate: `${actionButtonBase} border-slate-300 bg-white text-slate-700 hover:bg-slate-50 focus-visible:ring-slate-300`,
+    share: `${actionButtonBase} border-slate-300 bg-white text-slate-700 hover:bg-slate-50 focus-visible:ring-slate-300`,
+    delete: `${actionButtonBase} border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100 focus-visible:ring-rose-300`,
   };
 
   if (loading) {
@@ -597,20 +716,105 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
           </button>
         )}
 
+        {!showCreateForm && !editingCharacter && (
+          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-card mb-6">
+            <h3 className="text-base font-semibold text-slate-800 mb-3">공유 코드로 캐릭터 받기</h3>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={9}
+                value={shareCodeInput}
+                onChange={(e) => setShareCodeInput(e.target.value.replace(/[^0-9]/g, ''))}
+                placeholder="9자리 공유 코드 입력"
+                className="flex-1 px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+              />
+              <button
+                type="button"
+                onClick={handleRedeemShareCode}
+                disabled={redeemingShareCode}
+                className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition-colors font-medium"
+              >
+                {redeemingShareCode ? '받는 중...' : '코드로 받기'}
+              </button>
+            </div>
+            {latestShareCode && (
+              <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                <p className="text-sm text-amber-800">
+                  <span className="font-semibold">{latestShareCode.characterName}</span> 공유 코드:
+                  <span className="ml-2 font-mono font-bold text-base tracking-wider">{latestShareCode.code}</span>
+                  <span className="ml-2 text-xs text-amber-700">(3분 유효)</span>
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Character List */}
+        {notice && !showCreateForm && !editingCharacter && (
+          <div className="mb-4 bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg text-sm">
+            {notice}
+          </div>
+        )}
+        {error && !showCreateForm && !editingCharacter && (
+          <div className="mb-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
+            {error}
+          </div>
+        )}
         <div className="space-y-4">
           {characters.length === 0 ? (
             <div className="bg-white p-8 rounded-xl text-center border border-slate-200 shadow-card">
               <p className="text-slate-500">아직 캐릭터가 없습니다. 새로 만들어보세요!</p>
             </div>
           ) : (
-            characters.map((character) => (
-              <div
-                key={character.id}
-                className="bg-white p-6 rounded-xl shadow-card border border-slate-200 hover:shadow-card-hover transition-all"
-              >
-                <div className="flex justify-between items-start mb-4">
-                  <div className="flex-1">
+            characters.map((character) => {
+              const isSelectedCharacter = currentCharacter?.id === character.id;
+
+              return (
+                <div
+                  key={character.id}
+                  className="bg-white p-6 rounded-xl shadow-card border border-slate-200 hover:shadow-card-hover transition-all"
+                >
+                <div className="mb-4 rounded-lg border border-slate-200 bg-slate-100 p-1.5">
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5">
+                    <button
+                      onClick={() => onSelectCharacter(character)}
+                      className={isSelectedCharacter ? actionButtonStyle.selected : actionButtonStyle.select}
+                      aria-pressed={isSelectedCharacter}
+                    >
+                      {isSelectedCharacter ? '선택됨' : '선택'}
+                    </button>
+                    <button
+                      onClick={() => startEdit(character)}
+                      className={actionButtonStyle.edit}
+                    >
+                      수정
+                    </button>
+                    <button
+                      onClick={() => handleDuplicate(character.id)}
+                      disabled={duplicatingCharacterId === character.id}
+                      className={actionButtonStyle.duplicate}
+                    >
+                      {duplicatingCharacterId === character.id ? '복제 중...' : '복제'}
+                    </button>
+                    <button
+                      onClick={() => handleCreateShareCode(character.id)}
+                      disabled={sharingCharacterId === character.id}
+                      className={actionButtonStyle.share}
+                    >
+                      {sharingCharacterId === character.id ? '코드 생성 중...' : '공유코드'}
+                    </button>
+                    <button
+                      onClick={() => handleDelete(character.id)}
+                      className={actionButtonStyle.delete}
+                    >
+                      삭제
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mb-4">
                     <h3 className="text-xl font-bold text-slate-800 mb-1">{character.name}</h3>
                     <p className="text-sm text-slate-500">
                       {character.data.race || '인간'} • {character.data.age || 25}세
@@ -618,27 +822,6 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
                     {character.data.concept && (
                       <p className="text-sm text-slate-600 mt-1 italic">{character.data.concept}</p>
                     )}
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      onClick={() => onSelectCharacter(character)}
-                      className="bg-green-600 hover:bg-green-700 text-white px-4 py-2.5 rounded-lg transition-colors text-sm font-medium shadow-sm"
-                    >
-                      선택
-                    </button>
-                    <button
-                      onClick={() => startEdit(character)}
-                      className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-lg transition-colors text-sm font-medium shadow-sm"
-                    >
-                      수정
-                    </button>
-                    <button
-                      onClick={() => handleDelete(character.id)}
-                      className="bg-red-600 hover:bg-red-700 text-white px-4 py-2.5 rounded-lg transition-colors text-sm font-medium shadow-sm"
-                    >
-                      삭제
-                    </button>
-                  </div>
                 </div>
                 
                 {/* 능력치 */}
@@ -711,8 +894,9 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
                     </div>
                   </div>
                 )}
-              </div>
-            ))
+                </div>
+              );
+            })
           )}
         </div>
       </div>

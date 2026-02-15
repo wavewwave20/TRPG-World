@@ -72,6 +72,31 @@ class Character(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class CharacterShareCode(Base):
+    """
+    캐릭터 공유 코드를 나타내는 모델.
+
+    속성:
+        id: 고유 공유코드 식별자
+        code: 공유에 사용하는 9자리 숫자 코드
+        source_character_id: 공유 원본 캐릭터 ID
+        source_user_id: 공유를 생성한 사용자 ID
+        redeemed_by_user_id: 코드를 사용한 사용자 ID (미사용 시 NULL)
+        created_at: 공유코드 생성 시각
+        redeemed_at: 공유코드 사용 시각 (미사용 시 NULL)
+    """
+
+    __tablename__ = "character_share_codes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String(9), unique=True, nullable=False, index=True)
+    source_character_id = Column(Integer, ForeignKey("characters.id"), nullable=False)
+    source_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    redeemed_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    redeemed_at = Column(DateTime, nullable=True)
+
+
 class SessionParticipant(Base):
     """
     어떤 캐릭터가 어떤 세션에 있는지 추적하는 SessionParticipant 모델.
