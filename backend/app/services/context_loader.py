@@ -7,7 +7,7 @@ including session information, characters, and story history.
 The context loader handles:
 - Session information retrieval
 - Character list retrieval (session-associated)
-- Story history retrieval (most recent 20, ordered by created_at desc)
+- Story history retrieval (all entries, ordered by created_at desc)
 - Invalid data handling (graceful degradation)
 """
 
@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Character, GameSession, SessionParticipant, StoryAct, StoryLog
 from app.schemas import CharacterSheet, GameContext, StoryActInfo, StoryLogEntry
+from app.services.act_resolver import resolve_current_open_act
 
 logger = logging.getLogger("ai_gm.context_loader")
 
@@ -34,7 +35,7 @@ def load_game_context(db: Session, session_id: int, system_prompt: str) -> GameC
     This function retrieves all necessary information for AI prompt construction:
     - Session information and world prompt
     - All characters participating in the session
-    - Recent story history (max 20 entries, most recent first)
+    - Recent story history (all available entries)
 
     The function handles invalid character data gracefully by skipping
     problematic characters and continuing with valid ones.
@@ -54,7 +55,7 @@ def load_game_context(db: Session, session_id: int, system_prompt: str) -> GameC
         - 6.1: Retrieve all characters associated with session
         - 6.4: Handle invalid character data gracefully
         - 7.1: Retrieve story logs ordered by created_at desc
-        - 7.2: Limit story history to 20 most recent entries
+        - 7.2: Story history size limitation removed (load all)
     """
     logger.info(f"Loading game context for session {session_id}")
 
@@ -65,11 +66,14 @@ def load_game_context(db: Session, session_id: int, system_prompt: str) -> GameC
         # Load characters in this session
         characters = _load_characters(db, session_id)
 
-        # Load story history
-        story_history = _load_story_history(db, session_id)
-
         # Load current act info
         current_act = _load_current_act(db, session_id)
+
+        # Load story history: 현재 막이 있으면 해당 막의 전체 스토리, 없으면 세션 전체 로그 폴백
+        if current_act:
+            story_history = load_act_story_history(db, session_id, current_act.id)
+        else:
+            story_history = _load_story_history(db, session_id)
 
         # Build game context
         game_context = GameContext(
@@ -171,7 +175,7 @@ def _load_story_history(db: Session, session_id: int) -> list[StoryLogEntry]:
     """
     Load recent story history for the session.
 
-    This function retrieves the most recent 20 story log entries,
+    This function retrieves all story log entries for the session,
     ordered by created_at in descending order (newest first).
 
     Args:
@@ -179,18 +183,17 @@ def _load_story_history(db: Session, session_id: int) -> list[StoryLogEntry]:
         session_id: ID of the game session
 
     Returns:
-        List[StoryLogEntry]: List of story log entries (max 20)
+        List[StoryLogEntry]: List of story log entries
 
     Requirements:
         - 7.1: Order by created_at desc
-        - 7.2: Limit to 20 most recent entries
+        - 7.2: Story history size limitation removed (load all)
     """
-    # Query story logs: most recent 20, ordered by created_at desc
+    # Query story logs: all entries, ordered by created_at desc
     story_logs_db = (
         db.query(StoryLog)
         .filter(StoryLog.session_id == session_id)
         .order_by(StoryLog.created_at.desc())
-        .limit(20)
         .all()
     )
 
@@ -305,11 +308,7 @@ def _load_current_act(db: Session, session_id: int) -> StoryActInfo | None:
     Returns:
         StoryActInfo | None: 현재 막 정보 또는 None
     """
-    act = (
-        db.query(StoryAct)
-        .filter(StoryAct.session_id == session_id, StoryAct.ended_at.is_(None))
-        .first()
-    )
+    act = resolve_current_open_act(db, session_id)
 
     if not act:
         return None

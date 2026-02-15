@@ -32,11 +32,13 @@ from app.schemas import (
     StoryActInfo,
 )
 from app.services.ai_nodes import analyze_and_judge_actions, generate_narrative, generate_narrative_streaming
+from app.services.ai_nodes.narrative_node import parse_narrative_xml
 from app.services.background_task_manager import get_task_manager
 from app.services.context_loader import ContextLoadError, GameContext, load_game_context
 from app.services.dice_system import DiceSystem
 from app.services.session_state_manager import get_session_state_manager
 from app.services.stream_buffer import get_buffer_manager
+from app.services.act_resolver import resolve_current_open_act
 
 logger = logging.getLogger("ai_gm.service_v2")
 
@@ -131,7 +133,7 @@ class AIGMServiceV2:
                 player_actions=player_actions,
                 characters=game_context.characters,
                 world_context=game_context.world_prompt,
-                story_history=game_context.story_history,
+                story_history=game_context.story_history[-1:],
                 llm_model=self.llm_model,
                 ai_summary=game_context.ai_summary,
             )
@@ -220,7 +222,7 @@ class AIGMServiceV2:
                 if act.subtitle:
                     act_context += f": {act.subtitle}"
 
-            narrative = await generate_narrative(
+            raw_narrative = await generate_narrative(
                 judgments=judgments,
                 characters=game_context.characters,
                 world_context=game_context.world_prompt,
@@ -229,6 +231,9 @@ class AIGMServiceV2:
                 act_context=act_context,
                 ai_summary=game_context.ai_summary,
             )
+
+            # XML 파싱: clean narrative + metadata 분리
+            narrative, metadata = parse_narrative_xml(raw_narrative)
 
             logger.debug(f"이야기 생성 완료: {len(narrative)}자")
 
@@ -245,6 +250,7 @@ class AIGMServiceV2:
                 session_id=session_id,
                 judgments=judgments,
                 full_narrative=narrative,
+                narrative_metadata=metadata,
                 is_complete=True,
             )
 
@@ -487,6 +493,19 @@ class AIGMServiceV2:
             return
 
         try:
+            # 랜덤 이벤트 확률 판정
+            from app.services.event_probability import roll_event_trigger, update_event_probability
+
+            event_triggered = roll_event_trigger(session_id, self.db)
+
+            # 막 컨텍스트 구성
+            act_context = None
+            if game_context.current_act:
+                act = game_context.current_act
+                act_context = f"{act.act_number}막 — {act.title}"
+                if act.subtitle:
+                    act_context += f": {act.subtitle}"
+
             # LLM 스트리밍 호출
             token_count = 0
             async for token in generate_narrative_streaming(
@@ -495,7 +514,9 @@ class AIGMServiceV2:
                 world_context=game_context.world_prompt,
                 story_history=game_context.story_history,
                 llm_model=self.llm_model,
+                act_context=act_context,
                 ai_summary=game_context.ai_summary,
+                event_triggered=event_triggered,
             ):
                 # 버퍼에 토큰 추가
                 success = await buffer.add_token(token)
@@ -504,6 +525,24 @@ class AIGMServiceV2:
                 if not success:
                     logger.warning(f"버퍼 가득 참: 세션={session_id}, 생성 중단")
                     break
+
+            # XML 파싱: 메타데이터 추출
+            raw_text = buffer.get_full_text()
+            narrative, metadata = parse_narrative_xml(raw_text)
+
+            # 메타데이터를 버퍼에 저장 (핸들러에서 참조)
+            buffer.set_metadata(metadata)
+
+            # 버퍼 토큰을 clean narrative로 교체
+            async with buffer._lock:
+                buffer.tokens.clear()
+                buffer._total_chars = 0
+                if narrative:
+                    buffer.tokens.append(narrative)
+                    buffer._total_chars = len(narrative)
+
+            # 이벤트 확률 갱신 (발동 시 리셋, 미발동 시 증가)
+            update_event_probability(session_id, self.db, event_fired=event_triggered)
 
             buffer.mark_complete()
             logger.info(f"백그라운드 이야기 생성 완료: 세션={session_id}")
@@ -521,7 +560,9 @@ class AIGMServiceV2:
             logger.error(f"백그라운드 생성 에러: 세션={session_id}, {e}", exc_info=True)
             buffer.mark_error(error_msg)
 
-    async def confirm_dice_roll(self, session_id: int, character_id: int) -> DiceResult:
+    async def confirm_dice_roll(
+        self, session_id: int, character_id: int, judgment_id: int | None = None
+    ) -> DiceResult:
         """
         주사위 확인 - 미리 굴린 주사위 값을 반환합니다.
 
@@ -541,27 +582,82 @@ class AIGMServiceV2:
 
         Requirements: 3.2, 3.4, 8.2
         """
-        logger.info(f"주사위 확인: 세션={session_id}, 캐릭터={character_id}")
+        logger.info(f"주사위 확인: 세션={session_id}, 캐릭터={character_id}, 판정={judgment_id}")
 
         try:
-            # phase=0인 가장 최근 판정 조회 (사전 굴림)
-            judgment = (
-                self.db.query(ActionJudgment)
-                .filter(
-                    ActionJudgment.session_id == session_id,
-                    ActionJudgment.character_id == character_id,
-                    ActionJudgment.phase == 0,
+            judgment = None
+
+            # 신규 클라이언트: judgment_id를 지정해 정확한 판정을 확인
+            if judgment_id is not None:
+                judgment = (
+                    self.db.query(ActionJudgment)
+                    .filter(
+                        ActionJudgment.id == judgment_id,
+                        ActionJudgment.session_id == session_id,
+                        ActionJudgment.character_id == character_id,
+                    )
+                    .first()
                 )
-                .order_by(ActionJudgment.id.desc())
-                .first()
-            )
+                if not judgment:
+                    raise ValueError(
+                        f"판정을 찾을 수 없습니다: session={session_id}, "
+                        f"character={character_id}, judgment={judgment_id}"
+                    )
 
-            if not judgment:
-                raise ValueError(f"사전 굴림된 주사위 없음: 세션={session_id}, 캐릭터={character_id}")
+                # 정상 흐름: phase 0 -> 2
+                if judgment.phase == 0:
+                    judgment.phase = 2
+                    self.db.commit()
+                # 중복 클릭/재전송: 이미 처리된 판정이면 그대로 성공 처리
+                elif judgment.phase in (2, 3):
+                    logger.info(
+                        "이미 확인된 판정 재요청으로 간주합니다: "
+                        f"judgment={judgment.id}, phase={judgment.phase}"
+                    )
+                else:
+                    raise ValueError(
+                        f"확인 가능한 판정 단계가 아닙니다: "
+                        f"judgment={judgment.id}, phase={judgment.phase}"
+                    )
+            else:
+                # 레거시 클라이언트 호환: judgment_id 없이 가장 최근 phase=0 판정 확인
+                judgment = (
+                    self.db.query(ActionJudgment)
+                    .filter(
+                        ActionJudgment.session_id == session_id,
+                        ActionJudgment.character_id == character_id,
+                        ActionJudgment.phase == 0,
+                    )
+                    .order_by(ActionJudgment.id.desc())
+                    .first()
+                )
 
-            # phase를 2로 변경 (플레이어 확인 완료)
-            judgment.phase = 2
-            self.db.commit()
+                if judgment:
+                    judgment.phase = 2
+                    self.db.commit()
+                else:
+                    # 레이스/중복 요청 대응: 이미 2/3으로 전환된 가장 최근 판정을 반환
+                    judgment = (
+                        self.db.query(ActionJudgment)
+                        .filter(
+                            ActionJudgment.session_id == session_id,
+                            ActionJudgment.character_id == character_id,
+                            ActionJudgment.phase.in_([2, 3]),
+                        )
+                        .order_by(ActionJudgment.id.desc())
+                        .first()
+                    )
+                    if not judgment:
+                        raise ValueError(
+                            f"사전 굴림된 주사위 없음: 세션={session_id}, 캐릭터={character_id}"
+                        )
+                    logger.info(
+                        "phase=0 판정이 없어 최신 확정 판정을 반환합니다: "
+                        f"judgment={judgment.id}, phase={judgment.phase}"
+                    )
+
+            if judgment is None:
+                raise ValueError("판정 조회 실패")
 
             logger.info(
                 f"주사위 확인 완료: 캐릭터={character_id}, "
@@ -570,12 +666,14 @@ class AIGMServiceV2:
             )
 
             # 결과 반환
+            raw_dice = judgment.dice_result if judgment.dice_result is not None else 1
+            raw_difficulty = judgment.difficulty if judgment.difficulty is not None else 5
             return DiceResult(
                 character_id=character_id,
                 action_text=judgment.action_text,
-                dice_roll=judgment.dice_result,
+                dice_roll=min(max(raw_dice, 1), 20),
                 modifier=judgment.modifier,
-                difficulty=judgment.difficulty,
+                difficulty=min(max(raw_difficulty, 5), 30),
             )
 
         except Exception as e:
@@ -587,10 +685,10 @@ class AIGMServiceV2:
         """
         버퍼에서 이야기를 스트리밍으로 전송합니다.
 
-        이 메서드는 Phase 3에서 호출되며, 백그라운드에서 생성된 이야기를
-        클라이언트로 스트리밍합니다. 버퍼가 아직 완료되지 않았다면 새 토큰을
-        기다리면서 스트리밍하고, 완료되면 모든 토큰을 전송한 후 데이터베이스에
-        저장합니다.
+        Wait-for-Completion 전략:
+        백그라운드 생성이 Phase 1에서 시작되고, 클라이언트 소비는 Phase 3에서
+        발생하므로 보통 이미 완료 상태입니다. 완료를 기다린 후 clean narrative를
+        청크로 스트리밍합니다.
 
         Args:
             session_id: 게임 세션 ID
@@ -600,8 +698,6 @@ class AIGMServiceV2:
 
         Raises:
             ValueError: 버퍼를 찾을 수 없거나 에러가 발생한 경우
-
-        Requirements: 1.3, 1.5, 10.1, 10.2, 10.3, 10.4
         """
         logger.info(f"이야기 스트리밍 시작: 세션={session_id}")
 
@@ -615,33 +711,33 @@ class AIGMServiceV2:
         if buffer.error:
             raise ValueError(f"이야기 생성 실패: {buffer.error}")
 
-        # 토큰 스트리밍
-        index = 0
+        # 버퍼 완료 대기 (백그라운드 생성이 끝날 때까지)
+        wait_count = 0
+        while not buffer.is_complete:
+            if buffer.error:
+                raise ValueError(f"이야기 생성 실패: {buffer.error}")
+            await asyncio.sleep(0.1)
+            wait_count += 1
+            if wait_count % 100 == 0:
+                logger.debug(f"버퍼 완료 대기 중: 세션={session_id}, {wait_count * 0.1:.1f}초 경과")
+
+        if buffer.error:
+            raise ValueError(f"이야기 생성 실패: {buffer.error}")
+
+        # clean narrative를 청크로 스트리밍
+        full_narrative = buffer.get_full_text()
+        chunk_size = 4  # 한국어 기준 자연스러운 타이핑 효과
         token_count = 0
 
-        while True:
-            # 버퍼에서 토큰 가져오기
-            tokens = buffer.get_tokens(start_index=index)
+        for i in range(0, len(full_narrative), chunk_size):
+            chunk = full_narrative[i:i + chunk_size]
+            yield chunk
+            token_count += 1
+            await asyncio.sleep(0.03)  # 30ms per chunk
 
-            logger.debug(f"Got {len(tokens)} tokens from buffer (index={index}, complete={buffer.is_complete})")
-
-            # 토큰 전송 (50ms 간격으로 타이핑 효과)
-            for token in tokens:
-                logger.debug(f"Yielding token: {token[:20]}..." if len(token) > 20 else f"Yielding token: {token}")
-                yield token
-                index += 1
-                token_count += 1
-                await asyncio.sleep(0.05)  # 50ms = 20 tokens/second
-
-            if buffer.is_complete:
-                logger.info(f"이야기 스트리밍 완료: 세션={session_id}, 토큰={token_count}개")
-                break
-
-            # 새 토큰 대기
-            await asyncio.sleep(0.1)
+        logger.info(f"이야기 스트리밍 완료: 세션={session_id}, 청크={token_count}개")
 
         try:
-            full_narrative = buffer.get_full_text()
             await self._save_narrative_to_database(session_id, full_narrative)
             logger.info(f"이야기 DB 저장 완료: 세션={session_id}")
             # 상태 효과 회복 체크
@@ -663,11 +759,7 @@ class AIGMServiceV2:
         Requirements: 8.4, 8.5
         """
         try:
-            current_act = (
-                self.db.query(StoryAct)
-                .filter(StoryAct.session_id == session_id, StoryAct.ended_at.is_(None))
-                .first()
-            )
+            current_act = resolve_current_open_act(self.db, session_id)
 
             # StoryLog 생성
             story_log = StoryLog(
@@ -690,6 +782,39 @@ class AIGMServiceV2:
             for judgment in judgments:
                 judgment.story_log_id = story_log.id
                 judgment.phase = 3  # Phase 3: 서술 완료
+
+            # 직전 USER StoryLog에 판정 스냅샷 저장
+            if judgments:
+                char_ids = {j.character_id for j in judgments}
+                char_name_map = {
+                    c.id: c.name
+                    for c in self.db.query(Character).filter(Character.id.in_(char_ids)).all()
+                }
+
+                latest_user_log = (
+                    self.db.query(StoryLog)
+                    .filter(StoryLog.session_id == session_id, StoryLog.role == "USER")
+                    .order_by(StoryLog.created_at.desc())
+                    .first()
+                )
+                if latest_user_log:
+                    latest_user_log.judgments_data = [
+                        {
+                            "id": j.id,
+                            "character_id": j.character_id,
+                            "character_name": char_name_map.get(
+                                j.character_id, f"캐릭터 {j.character_id}"
+                            ),
+                            "action_text": j.action_text,
+                            "action_type": j.action_type,
+                            "dice_result": j.dice_result,
+                            "modifier": j.modifier,
+                            "final_value": j.final_value,
+                            "difficulty": j.difficulty,
+                            "outcome": j.outcome,
+                        }
+                        for j in judgments
+                    ]
 
             # 커밋
             self.db.commit()
@@ -714,11 +839,7 @@ class AIGMServiceV2:
             Exception: 데이터베이스 저장 실패 시
         """
         try:
-            current_act = (
-                self.db.query(StoryAct)
-                .filter(StoryAct.session_id == session_id, StoryAct.ended_at.is_(None))
-                .first()
-            )
+            current_act = resolve_current_open_act(self.db, session_id)
 
             # 서술을 story_logs에 저장
             story_log = StoryLog(
@@ -849,11 +970,7 @@ class AIGMServiceV2:
         from app.services.context_loader import load_act_story_history
 
         # 현재 막 조회
-        current_act_db = (
-            self.db.query(StoryAct)
-            .filter(StoryAct.session_id == session_id, StoryAct.ended_at.is_(None))
-            .first()
-        )
+        current_act_db = resolve_current_open_act(self.db, session_id)
 
         if not current_act_db:
             logger.debug(f"세션 {session_id}: 현재 막 없음, 전환 스킵")
@@ -940,6 +1057,139 @@ class AIGMServiceV2:
             act_number=current_act_db.act_number + 1,
             title=analysis.new_act_title or f"{current_act_db.act_number + 1}막",
             subtitle=analysis.new_act_subtitle,
+            started_at=datetime.utcnow(),
+        )
+        self.db.add(new_act)
+        self.db.commit()
+        self.db.refresh(new_act)
+
+        new_act_info = StoryActInfo(
+            id=new_act.id,
+            act_number=new_act.act_number,
+            title=new_act.title,
+            subtitle=new_act.subtitle,
+            started_at=new_act.started_at.isoformat(),
+        )
+
+        completed_act_info = StoryActInfo(
+            id=current_act_db.id,
+            act_number=current_act_db.act_number,
+            title=current_act_db.title,
+            subtitle=current_act_db.subtitle,
+            started_at=current_act_db.started_at.isoformat(),
+        )
+
+        return ActTransitionResult(
+            completed_act=completed_act_info,
+            new_act=new_act_info,
+            growth_rewards=growth_rewards,
+        )
+
+    async def execute_act_transition(
+        self, session_id: int, new_act_title: str, new_act_subtitle: str | None = None
+    ) -> ActTransitionResult | None:
+        """메타데이터 기반 막 전환을 실행합니다 (AI 분석 호출 없음).
+
+        내러티브 AI가 act_transition=true로 응답했을 때 호출됩니다.
+        AI 막 분석 호출 없이 DB 작업만 수행합니다:
+        1. 코드 가드: AI 서술 엔트리 2개 이하면 전환 거부
+        2. 성장 보상 생성 (AI 호출)
+        3. ai_summary 갱신 (AI 호출)
+        4. 현재 막 종료, 새 막 생성
+
+        Args:
+            session_id: 게임 세션 ID
+            new_act_title: 새 막 제목
+            new_act_subtitle: 새 막 부제 (옵션)
+
+        Returns:
+            ActTransitionResult | None: 전환 결과 또는 None (거부 시)
+        """
+        from app.services.ai_nodes.act_analysis_node import generate_growth_rewards
+        from app.services.ai_nodes.session_summary_node import generate_updated_ai_summary
+        from app.services.context_loader import load_act_story_history
+
+        # 현재 막 조회
+        current_act_db = resolve_current_open_act(self.db, session_id)
+        if not current_act_db:
+            logger.debug(f"세션 {session_id}: 현재 막 없음, 전환 스킵")
+            return None
+
+        # 현재 막의 스토리 로드
+        act_story = load_act_story_history(self.db, session_id, current_act_db.id)
+
+        # 코드 가드: AI 서술 엔트리 2개 이하면 전환 거부
+        ai_entries = [e for e in act_story if e.role == "AI"]
+        if len(ai_entries) <= 2:
+            logger.warning(
+                f"세션 {session_id}: AI 서술 {len(ai_entries)}개, 전환 거부 (최소 3개 필요)"
+            )
+            return None
+
+        current_act_info = StoryActInfo(
+            id=current_act_db.id,
+            act_number=current_act_db.act_number,
+            title=current_act_db.title,
+            subtitle=current_act_db.subtitle,
+            started_at=current_act_db.started_at.isoformat(),
+        )
+
+        logger.info(
+            f"세션 {session_id}: 메타데이터 기반 막 전환! "
+            f"'{current_act_info.title}' → '{new_act_title}'"
+        )
+
+        # 게임 컨텍스트 로드
+        game_context = load_game_context(db=self.db, session_id=session_id, system_prompt="")
+
+        # 성장 보상 생성
+        growth_rewards = await generate_growth_rewards(
+            world_context=game_context.world_prompt,
+            characters=game_context.characters,
+            act_story_entries=act_story,
+            act_info=current_act_info,
+            llm_model=self.llm_model,
+        )
+
+        # 성장 보상 적용
+        for reward in growth_rewards:
+            self._apply_growth_reward(reward)
+
+        # ai_summary 갱신
+        session = self.db.query(GameSession).filter(GameSession.id == session_id).first()
+        if session:
+            try:
+                session.ai_summary = await generate_updated_ai_summary(
+                    previous_summary=session.ai_summary,
+                    completed_act=current_act_info,
+                    act_story_entries=act_story,
+                    growth_rewards=growth_rewards,
+                    llm_model=self.llm_model,
+                )
+                logger.info(f"세션 {session_id}: ai_summary 갱신 완료")
+            except Exception as e:
+                logger.error(
+                    f"세션 {session_id}: ai_summary 갱신 실패, 기존 요약 유지 ({e})",
+                    exc_info=True,
+                )
+
+        # 현재 막 종료
+        current_act_db.ended_at = datetime.utcnow()
+        last_log = (
+            self.db.query(StoryLog)
+            .filter(StoryLog.session_id == session_id, StoryLog.act_id == current_act_db.id)
+            .order_by(StoryLog.created_at.desc())
+            .first()
+        )
+        if last_log:
+            current_act_db.end_story_log_id = last_log.id
+
+        # 새 막 생성
+        new_act = StoryAct(
+            session_id=session_id,
+            act_number=current_act_db.act_number + 1,
+            title=new_act_title,
+            subtitle=new_act_subtitle,
             started_at=datetime.utcnow(),
         )
         self.db.add(new_act)

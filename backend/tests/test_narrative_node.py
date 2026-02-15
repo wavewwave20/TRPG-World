@@ -363,7 +363,7 @@ class TestGenerateNarrative:
     @pytest.mark.asyncio
     @patch("app.services.ai_nodes.narrative_node.ChatLiteLLM")
     @patch("app.services.ai_nodes.narrative_node.load_prompt")
-    async def test_story_history_limited_to_5(
+    async def test_story_history_all_entries_included(
         self,
         mock_load_prompt,
         mock_llm_cls,
@@ -371,7 +371,7 @@ class TestGenerateNarrative:
         sample_characters,
         world_context,
     ):
-        """Only the last 5 story history entries should be included."""
+        """All story history entries should be included (no limit)."""
         mock_load_prompt.return_value = MagicMock(content="System prompt")
 
         long_history = [f"Entry {i}" for i in range(10)]
@@ -405,12 +405,8 @@ class TestGenerateNarrative:
 
         context = captured_context["context"]
 
-        # First 5 entries (0-4) should NOT be included
-        for i in range(5):
-            assert f"Entry {i}" not in context
-
-        # Last 5 entries (5-9) should be included
-        for i in range(5, 10):
+        # All entries (0-9) should be included (no history limit)
+        for i in range(10):
             assert f"Entry {i}" in context
 
     @pytest.mark.asyncio

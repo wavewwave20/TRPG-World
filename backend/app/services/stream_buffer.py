@@ -48,6 +48,7 @@ class StreamBuffer:
         self.error: Optional[str] = None
         self.created_at = datetime.utcnow()
         self.max_size = max_size
+        self.metadata: Optional[dict] = None
         self._lock = asyncio.Lock()
         self._total_chars = 0
 
@@ -138,6 +139,16 @@ class StreamBuffer:
         self.error = error
         self.is_complete = True
         logger.error(f"버퍼 에러: 세션={self.session_id}, {error}")
+
+    def set_metadata(self, metadata: dict):
+        """
+        Set narrative metadata (e.g., act transition info).
+
+        Args:
+            metadata: Parsed metadata from narrative XML output
+        """
+        self.metadata = metadata
+        logger.info(f"메타데이터 설정: 세션={self.session_id}, keys={list(metadata.keys())}")
 
     def get_full_text(self) -> str:
         """

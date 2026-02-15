@@ -6,7 +6,8 @@
 import os
 
 from app.database import SessionLocal
-from app.models import ActionJudgment, Character, SessionParticipant, StoryAct, StoryLog
+from app.models import ActionJudgment, Character, SessionParticipant, StoryLog
+from app.services.act_resolver import resolve_current_open_act
 from app.socket.managers.action_queue_manager import (
     add_action,
     clear_queue,
@@ -286,11 +287,7 @@ def register_handlers(sio):
                 narrative_parts = [f"{action['character_name']}: {action['action_text']}" for action in actions]
                 combined_narrative = "\n".join(narrative_parts)
 
-                current_act = (
-                    db.query(StoryAct)
-                    .filter(StoryAct.session_id == session_id, StoryAct.ended_at.is_(None))
-                    .first()
-                )
+                current_act = resolve_current_open_act(db, session_id)
 
                 # StoryLog에 저장 (role='USER')
                 story_entry = StoryLog(
@@ -388,7 +385,9 @@ def register_handlers(sio):
                         raise ValueError(f"캐릭터에 매핑된 행동이 없습니다. Actions: {actions}")
 
                     # AI GM 서비스 초기화
-                    llm_model = os.getenv("LLM_MODEL", "gpt-4o")
+                    from app.services.llm_config_resolver import get_active_llm_model
+
+                    llm_model = get_active_llm_model()
                     ai_service = AIGMServiceV2(db=db, llm_model=llm_model)
 
                     # Phase 1: 행동 분석 및 DC 결정
