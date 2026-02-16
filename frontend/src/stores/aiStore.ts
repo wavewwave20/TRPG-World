@@ -11,6 +11,7 @@ interface AIStore {
   judgments: (JudgmentSetup | JudgmentResult)[];
   currentJudgmentIndex: number;
   currentNarrative: string;
+  eventTriggered: boolean;
   judgmentHistory: Map<number, JudgmentResult[]>;  // storyLogId -> judgments
   lastDiceRolledAt: number | null; // timestamp to gate next transition
   ackRequiredForActionId: number | null; // require user confirm before moving on (for local player)
@@ -24,6 +25,7 @@ interface AIStore {
   setJudgmentRolling: (actionId: number) => void;
   appendNarrativeToken: (token: string) => void;
   clearCurrentNarrative: () => void;
+  setEventTriggered: (triggered: boolean) => void;
   saveJudgmentsToHistory: (storyLogId: number, judgments: JudgmentResult[]) => void;
   clearJudgments: () => void;
   setLastDiceRolledAt: (ts: number) => void;
@@ -37,6 +39,7 @@ export const useAIStore = create<AIStore>((set) => ({
   judgments: [],
   currentJudgmentIndex: 0,
   currentNarrative: '',
+  eventTriggered: false,
   judgmentHistory: new Map(),
   lastDiceRolledAt: null,
   ackRequiredForActionId: null,
@@ -72,7 +75,9 @@ export const useAIStore = create<AIStore>((set) => ({
     currentNarrative: state.currentNarrative + token
   })),
   
-  clearCurrentNarrative: () => set({ currentNarrative: '' }),
+  clearCurrentNarrative: () => set({ currentNarrative: '', eventTriggered: false }),
+
+  setEventTriggered: (triggered) => set({ eventTriggered: triggered }),
   
   saveJudgmentsToHistory: (storyLogId, judgments) => set((state) => {
     const newHistory = new Map(state.judgmentHistory);
@@ -80,10 +85,11 @@ export const useAIStore = create<AIStore>((set) => ({
     return { judgmentHistory: newHistory };
   }),
   
-  clearJudgments: () => set({ 
+  clearJudgments: () => set({
     judgments: [],
     currentJudgmentIndex: 0,
     currentNarrative: '',
+    eventTriggered: false,
     judgmentHistory: new Map(),
     lastDiceRolledAt: null,
     ackRequiredForActionId: null,

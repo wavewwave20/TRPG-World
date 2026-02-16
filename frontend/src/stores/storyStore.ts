@@ -7,6 +7,7 @@ interface StoryEntry {
   content: string;
   created_at: string;
   judgments?: JudgmentSummary[] | null;
+  event_triggered?: boolean;
 }
 
 interface StoryStore {

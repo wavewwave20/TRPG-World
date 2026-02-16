@@ -498,6 +498,9 @@ class AIGMServiceV2:
 
             event_triggered = roll_event_trigger(session_id, self.db)
 
+            # 버퍼에 이벤트 발생 여부 저장
+            buffer.event_triggered = event_triggered
+
             # 막 컨텍스트 구성
             act_context = None
             if game_context.current_act:
@@ -737,15 +740,18 @@ class AIGMServiceV2:
 
         logger.info(f"이야기 스트리밍 완료: 세션={session_id}, 청크={token_count}개")
 
+        # 버퍼에서 이벤트 발생 여부 가져오기
+        event_triggered = buffer.event_triggered if buffer else False
+
         try:
-            await self._save_narrative_to_database(session_id, full_narrative)
+            await self._save_narrative_to_database(session_id, full_narrative, event_triggered=event_triggered)
             logger.info(f"이야기 DB 저장 완료: 세션={session_id}")
             # 상태 효과 회복 체크
             self._apply_status_recovery(session_id)
         except Exception as e:
             logger.error(f"이야기 저장 실패: {e}", exc_info=True)
 
-    async def _save_narrative_to_database(self, session_id: int, narrative: str):
+    async def _save_narrative_to_database(self, session_id: int, narrative: str, event_triggered: bool = False):
         """
         이야기를 데이터베이스에 저장합니다.
 
@@ -755,6 +761,7 @@ class AIGMServiceV2:
         Args:
             session_id: 게임 세션 ID
             narrative: 생성된 이야기 전체 텍스트
+            event_triggered: 돌발이벤트 발생 여부
 
         Requirements: 8.4, 8.5
         """
@@ -767,6 +774,7 @@ class AIGMServiceV2:
                 role="AI",
                 content=narrative,
                 act_id=current_act.id if current_act else None,
+                event_triggered=event_triggered,
                 created_at=datetime.utcnow(),
             )
             self.db.add(story_log)

@@ -139,6 +139,7 @@ class StoryLog(Base):
     role = Column(String(10), nullable=False)  # "USER" 또는 "AI"
     content = Column(Text, nullable=False)
     judgments_data = Column(JSON, nullable=True)  # 판정 결과 스냅샷 (USER 메시지 전용)
+    event_triggered = Column(Boolean, default=False, nullable=False)  # 돌발이벤트 발생 여부
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 

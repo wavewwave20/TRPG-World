@@ -24,9 +24,12 @@ export function registerNarrativeHandlers(socket: Socket) {
   });
 
   // Narrative stream started
-  socket.on('narrative_stream_started', () => {
+  socket.on('narrative_stream_started', (data: { session_id?: number; event_triggered?: boolean }) => {
     useAIStore.getState().setGenerating(true);
     useAIStore.getState().clearCurrentNarrative();
+    if (data?.event_triggered) {
+      useAIStore.getState().setEventTriggered(true);
+    }
     useGameStore.getState().setJudgmentModalOpen(false);
     useGameStore.getState().addNotification({
       type: 'system',
@@ -42,8 +45,6 @@ export function registerNarrativeHandlers(socket: Socket) {
   // Narrative complete (streaming finished)
   socket.on('narrative_complete', (data: { session_id: number }) => {
     useAIStore.getState().setGenerating(false);
-    useAIStore.getState().clearJudgments();
-    useAIStore.getState().clearCurrentNarrative();
     useActionStore.getState().setActionInputDisabled(false);
     window.dispatchEvent(new CustomEvent('story_logs_updated', { detail: { session_id: data.session_id } }));
     useGameStore.getState().addNotification({

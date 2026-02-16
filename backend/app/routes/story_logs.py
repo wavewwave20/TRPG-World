@@ -52,6 +52,7 @@ class StoryLogResponse(BaseModel):
     content: str
     created_at: str
     judgments: list[JudgmentSummary] | None = None
+    event_triggered: bool = False
 
     class Config:
         json_schema_extra = {
@@ -236,6 +237,7 @@ async def get_story_logs(session_id: int, db: Session = Depends(get_db)):
                     content=log.content,
                     created_at=to_kst_iso(log.created_at),
                     judgments=judgments_list,
+                    event_triggered=log.event_triggered,
                 )
             )
 

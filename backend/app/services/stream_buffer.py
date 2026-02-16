@@ -49,6 +49,7 @@ class StreamBuffer:
         self.created_at = datetime.utcnow()
         self.max_size = max_size
         self.metadata: Optional[dict] = None
+        self.event_triggered: bool = False
         self._lock = asyncio.Lock()
         self._total_chars = 0
 

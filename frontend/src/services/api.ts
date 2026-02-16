@@ -158,6 +158,7 @@ export interface StoryLogEntry {
   content: string;
   created_at: string;
   judgments?: JudgmentSummary[] | null;
+  event_triggered?: boolean;
 }
 
 /**

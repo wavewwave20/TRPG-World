@@ -18,6 +18,21 @@ from app.socket.server import logger
 _narrative_stream_in_progress: set[int] = set()
 
 
+def _coerce_requires_roll(value) -> bool:
+    """requires_roll 값을 불리언으로 안전하게 변환합니다."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"false", "0", "no", "off", "n"}:
+            return False
+        if normalized in {"true", "1", "yes", "on", "y"}:
+            return True
+    if isinstance(value, (int, float)):
+        return value != 0
+    return bool(value)
+
+
 async def _generate_opening_narrative(session_id, world_prompt, db, room_name, sio):
     """AI로 오프닝 서술을 스트리밍 생성합니다.
 
@@ -555,7 +570,7 @@ def register_handlers(sio):
                         "modifier": analysis.modifier,
                         "difficulty": analysis.difficulty,
                         "difficulty_reasoning": analysis.difficulty_reasoning,
-                        "requires_roll": bool(analysis.requires_roll),
+                        "requires_roll": _coerce_requires_roll(analysis.requires_roll),
                     },
                     to=sid,
                 )
@@ -574,7 +589,7 @@ def register_handlers(sio):
                         "modifier": analysis.modifier,
                         "difficulty": analysis.difficulty,
                         "difficulty_reasoning": analysis.difficulty_reasoning,
-                        "requires_roll": bool(analysis.requires_roll),
+                        "requires_roll": _coerce_requires_roll(analysis.requires_roll),
                     },
                     room=room_name,
                     skip_sid=sid,
@@ -1132,8 +1147,12 @@ def register_handlers(sio):
                     )
                     return
 
-                # 스트림 시작 이벤트
-                await sio.emit("narrative_stream_started", {"session_id": session_id}, room=room_name)
+                # 스트림 시작 이벤트 (돌발이벤트 여부 포함)
+                await sio.emit(
+                    "narrative_stream_started",
+                    {"session_id": session_id, "event_triggered": buffer.event_triggered},
+                    room=room_name,
+                )
 
                 # AIGMServiceV2로 이야기 스트리밍
                 from app.services.ai_gm_service_v2 import AIGMServiceV2
