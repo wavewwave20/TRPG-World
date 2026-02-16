@@ -13,6 +13,10 @@ services:
       - REGISTRATION_CODE=${REGISTRATION_CODE:-test123}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - LANGSMITH_TRACING=${LANGSMITH_TRACING:-false}
+      - LANGSMITH_ENDPOINT=${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
+      - LANGSMITH_API_KEY=${LANGSMITH_API_KEY}
+      - LANGSMITH_PROJECT=${LANGSMITH_PROJECT:-trpg-world}
       - LLM_MODEL=${LLM_MODEL:-gpt-4o}
       - SYSTEM_PROMPT_PATH=app/prompts/system_prompt.md
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
@@ -22,7 +26,7 @@ services:
       - ./backend/trpg_world.db:/app/trpg_world.db
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3
