@@ -45,8 +45,18 @@ export function resolveAbilityScore(actionType: string | undefined): AbilityScor
  */
 export function computeRequiresRoll(
   difficulty: number,
-  requiresRoll?: boolean
+  requiresRoll?: unknown
 ): boolean {
-  if (difficulty <= 0) return false;
-  return requiresRoll ?? true;
+  const normalizedDifficulty = Number(difficulty);
+  if (Number.isFinite(normalizedDifficulty) && normalizedDifficulty <= 0) return false;
+
+  if (typeof requiresRoll === 'boolean') return requiresRoll;
+  if (typeof requiresRoll === 'number') return requiresRoll !== 0;
+  if (typeof requiresRoll === 'string') {
+    const normalized = requiresRoll.trim().toLowerCase();
+    if (['false', '0', 'no', 'off', 'n'].includes(normalized)) return false;
+    if (['true', '1', 'yes', 'on', 'y'].includes(normalized)) return true;
+  }
+
+  return true;
 }
