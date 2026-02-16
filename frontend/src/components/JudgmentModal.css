@@ -205,7 +205,9 @@
 .judgment-modal-overlay,
 .judgment-modal-content,
 .judgment-card-enter,
-.judgment-card-exit {
+.judgment-card-exit,
+.auto-progress-fill,
+.dice-charge-fill {
   will-change: transform, opacity;
   transform: translateZ(0);
   backface-visibility: hidden;
@@ -216,15 +218,19 @@
   .judgment-modal-overlay,
   .judgment-modal-content,
   .judgment-card-enter,
-  .judgment-card-exit {
+  .judgment-card-exit,
+  .auto-progress-fill,
+  .dice-charge-fill {
     animation: none !important;
     transition: none !important;
   }
-  
+
   .judgment-modal-overlay,
   .judgment-modal-content,
   .judgment-card-enter,
-  .judgment-card-exit {
+  .judgment-card-exit,
+  .auto-progress-fill,
+  .dice-charge-fill {
     will-change: auto;
     transform: none;
   }
@@ -266,6 +272,185 @@
     /* Improve rendering on retina displays */
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+/* Dice roll button - press & hold to charge, release to throw */
+.dice-roll-button {
+  position: relative;
+  overflow: hidden;
+  transition: background-color 0.6s ease-out, box-shadow 0.6s ease-out;
+  /* Prevent text selection on long press (mobile) */
+  user-select: none;
+  -webkit-user-select: none;
+  /* Remove default tap highlight on mobile */
+  -webkit-tap-highlight-color: transparent;
+}
+
+.dice-roll-button.charging {
+  background-color: #4338ca !important; /* indigo-700: deeper charge color */
+  box-shadow: 0 0 24px rgba(79, 70, 229, 0.5);
+}
+
+.dice-charge-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 0;
+  background-color: rgba(255, 255, 255, 0.25);
+  border-radius: inherit;
+  pointer-events: none;
+  transition: width 0.6s ease-out;
+}
+
+.dice-roll-button.charging .dice-charge-fill {
+  width: 100%;
+}
+
+.dice-roll-button:not(.charging) .dice-charge-fill {
+  width: 0;
+  transition: width 0.15s ease-in;
+}
+
+/* Fully charged — pulse glow to signal "release to throw" */
+.dice-roll-button.charged {
+  background-color: #3730a3 !important; /* indigo-800 */
+  animation: chargedPulse 0.6s ease-in-out infinite alternate;
+}
+
+@keyframes chargedPulse {
+  from {
+    box-shadow: 0 0 20px rgba(99, 102, 241, 0.5);
+  }
+  to {
+    box-shadow: 0 0 32px rgba(99, 102, 241, 0.8);
+  }
+}
+
+/* ── Dice roll animation phases ── */
+
+/* Phase 1: Shuffling numbers */
+.dice-number-shuffle {
+  animation: numberPulse 0.1s ease-in-out infinite alternate;
+}
+
+@keyframes numberPulse {
+  from { transform: scale(0.95); opacity: 0.6; }
+  to { transform: scale(1.05); opacity: 1; }
+}
+
+/* Phase 2: Dice result lands */
+.dice-number-land {
+  animation: numberLand 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.dice-number-land.critical-success {
+  animation: numberLand 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
+             criticalGlow 0.6s ease-in-out 0.3s infinite alternate;
+}
+
+.dice-number-land.critical-failure {
+  animation: numberLand 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
+             criticalShake 0.4s ease-in-out 0.3s;
+}
+
+@keyframes numberLand {
+  0% { transform: scale(1.4); opacity: 0; }
+  60% { transform: scale(0.95); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes criticalGlow {
+  from { filter: brightness(1) drop-shadow(0 0 0 transparent); }
+  to { filter: brightness(1.2) drop-shadow(0 0 8px rgba(245, 158, 11, 0.6)); }
+}
+
+@keyframes criticalShake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-4px) rotate(-2deg); }
+  40% { transform: translateX(4px) rotate(2deg); }
+  60% { transform: translateX(-3px) rotate(-1deg); }
+  80% { transform: translateX(3px) rotate(1deg); }
+}
+
+/* Phase 3: Modifier slides in */
+.dice-modifier-slide {
+  animation: modifierSlideIn 0.3s ease-out;
+}
+
+@keyframes modifierSlideIn {
+  from { opacity: 0; transform: translateX(16px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+/* Phase 4: Final value appears */
+.dice-final-value {
+  animation: finalValueAppear 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes finalValueAppear {
+  0% { opacity: 0; transform: scale(0.5); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+/* Result display fade-in */
+.result-display-enter {
+  animation: resultFadeIn 0.5s ease-out;
+}
+
+@keyframes resultFadeIn {
+  0% { opacity: 0; transform: translateY(8px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+/* Dice waiting spinner (before server responds) */
+.dice-waiting-spin {
+  animation: dice-spin-simple 1s linear infinite;
+}
+
+@keyframes dice-spin-simple {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dice-number-shuffle,
+  .dice-number-land,
+  .dice-number-land.critical-success,
+  .dice-number-land.critical-failure,
+  .dice-modifier-slide,
+  .dice-final-value,
+  .dice-waiting-spin,
+  .result-display-enter {
+    animation: none !important;
+  }
+}
+
+/* Auto-progress button gauge fill animation */
+.auto-progress-button {
+  position: relative;
+  overflow: hidden;
+}
+
+.auto-progress-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 0;
+  background-color: rgba(255, 255, 255, 0.3);
+  animation: autoProgressFill 1.5s linear forwards;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+@keyframes autoProgressFill {
+  from {
+    width: 0%;
+  }
+  to {
+    width: 100%;
   }
 }
 

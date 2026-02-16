@@ -319,6 +319,8 @@ export default function JudgmentPanel({ judgments, currentJudgmentIndex }: Judgm
               <div className="bg-white rounded-lg p-3 sm:p-4 md:p-6 border-2 border-blue-300">
                 <DiceRollAnimation
                   result={activeJudgment.dice_result}
+                  modifier={activeJudgment.modifier}
+                  finalValue={activeJudgment.final_value}
                   isCriticalSuccess={activeJudgment.dice_result === 20}
                   isCriticalFailure={activeJudgment.dice_result === 1}
                 />

@@ -10,6 +10,7 @@ import { useGameStore } from '../stores/gameStore';
 import { useAuthStore } from '../stores/authStore';
 import { useSocketStore } from '../stores/socketStore';
 import type { JudgmentResult, JudgmentSetup } from '../types/judgment';
+import { computeRequiresRoll } from '../utils/judgment';
 import './JudgmentModal.css';
 
 interface JudgmentModalProps {
@@ -182,7 +183,10 @@ function JudgmentModal({ isOpen, onClose, sessionId }: JudgmentModalProps) {
     const status = currentJudgment.status;
     
     if (status === 'active') {
-      const requiresRoll = currentJudgment.requires_roll ?? true;
+      const requiresRoll = computeRequiresRoll(
+        currentJudgment.difficulty,
+        currentJudgment.requires_roll
+      );
       return requiresRoll
         ? `${characterName}의 판정 차례입니다. 주사위를 굴려주세요.`
         : `${characterName}의 행동은 자동 성공입니다. 확인해주세요.`;

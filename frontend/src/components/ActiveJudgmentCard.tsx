@@ -1,4 +1,4 @@
-import { memo, useMemo } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import type { JudgmentSetup, JudgmentResult } from '../types/judgment';
 import { isJudgmentResult } from '../types/judgment';
 import { computeRequiresRoll, getAbilityNameKo } from '../utils/judgment';
@@ -22,6 +22,34 @@ interface ActiveJudgmentCardProps {
   /** Whether this is the last judgment in the sequence */
   isLastJudgment: boolean;
 }
+
+const DiceWaitingNumber = memo(function DiceWaitingNumber() {
+  const [displayNumber, setDisplayNumber] = useState(Math.floor(Math.random() * 20) + 1);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setDisplayNumber(Math.floor(Math.random() * 20) + 1);
+    }, 50);
+
+    return () => clearInterval(timer);
+  }, []);
+
+  return (
+    <div
+      className="my-4 p-4 bg-white rounded-lg border-2 border-blue-300 flex items-center justify-center"
+      role="status"
+      aria-live="polite"
+      aria-label="주사위를 굴리는 중입니다"
+    >
+      <span className="sr-only">주사위를 굴리는 중</span>
+      <div className="dice-number-shuffle" aria-hidden="true">
+        <span className="text-4xl sm:text-5xl font-bold text-blue-400 tabular-nums">
+          {displayNumber}
+        </span>
+      </div>
+    </div>
+  );
+});
 
 function ActiveJudgmentCard({
   judgment,
@@ -139,16 +167,23 @@ function ActiveJudgmentCard({
         </div>
       )}
 
-      {/* Dice Rolling Animation */}
+      {/* Dice Rolling: waiting for server response */}
+      {judgment.status === 'rolling' && !isJudgmentResult(judgment) && (
+        <DiceWaitingNumber />
+      )}
+
+      {/* Dice Rolling Animation: result arrived, playing animation */}
       {judgment.status === 'rolling' && isJudgmentResult(judgment) && (
         <div
           className="my-4 p-4 bg-white rounded-lg border-2 border-blue-300"
           role="status"
           aria-live="polite"
-          aria-label="주사위를 굴리는 중입니다"
+          aria-label="주사위 결과 애니메이션"
         >
           <DiceRollAnimation
             result={judgment.dice_result}
+            modifier={judgment.modifier}
+            finalValue={judgment.final_value}
             isCriticalSuccess={judgment.dice_result === 20}
             isCriticalFailure={judgment.dice_result === 1}
           />
@@ -157,7 +192,7 @@ function ActiveJudgmentCard({
 
       {/* Result Display */}
       {judgment.status === 'complete' && isJudgmentResult(judgment) && (
-        <div className="my-4">
+        <div className="my-4 result-display-enter">
           <ResultDisplay judgment={judgment} />
         </div>
       )}

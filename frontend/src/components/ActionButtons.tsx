@@ -1,5 +1,7 @@
 import { memo, useCallback } from "react";
 import type { JudgmentStatus } from "../types/judgment";
+import AutoProgressButton from "./AutoProgressButton";
+import DiceRollButton from "./DiceRollButton";
 
 interface ActionButtonsProps {
   status: JudgmentStatus;
@@ -37,25 +39,28 @@ function ActionButtons({
 
   return (
     <div className="mt-4 space-y-2" role="group" aria-label="판정 액션">
+      {/* Roll dice - press & hold to charge, release to throw */}
       {status === "active" && isCurrentPlayer && requiresRoll && (
-        <button
+        <DiceRollButton
           onClick={handleRollDiceClick}
-          className={`${baseButtonClasses} bg-blue-600 text-white hover:bg-blue-700 ${activeButtonClasses}`}
+          className={`${baseButtonClasses} bg-blue-600 text-white hover:bg-blue-700 shadow-lg hover:shadow-xl`}
         >
           🎲 주사위 굴리기
-        </button>
+        </DiceRollButton>
       )}
 
+      {/* Auto-progress confirm - gauge fill + auto-click */}
       {status === "active" && isCurrentPlayer && !requiresRoll && (
-        <button
+        <AutoProgressButton
           onClick={handleConfirmClick}
           className={`${baseButtonClasses} bg-green-600 text-white hover:bg-green-700 ${activeButtonClasses}`}
         >
           확인
-        </button>
+        </AutoProgressButton>
       )}
 
-      {status === "complete" && !isLastJudgment && isCurrentPlayer && (
+      {/* Next judgment - regular button when roll was required */}
+      {status === "complete" && !isLastJudgment && isCurrentPlayer && requiresRoll && (
         <button
           onClick={onNext}
           className={`${baseButtonClasses} bg-green-600 text-white hover:bg-green-700 ${activeButtonClasses}`}
@@ -64,13 +69,34 @@ function ActionButtons({
         </button>
       )}
 
-      {status === "complete" && isLastJudgment && isCurrentPlayer && (
+      {/* Next judgment - auto-progress when no roll was needed */}
+      {status === "complete" && !isLastJudgment && isCurrentPlayer && !requiresRoll && (
+        <AutoProgressButton
+          onClick={onNext}
+          className={`${baseButtonClasses} bg-green-600 text-white hover:bg-green-700 ${activeButtonClasses}`}
+        >
+          확인
+        </AutoProgressButton>
+      )}
+
+      {/* Story trigger - regular button when roll was required */}
+      {status === "complete" && isLastJudgment && isCurrentPlayer && requiresRoll && (
         <button
           onClick={onTriggerStory}
           className={`${baseButtonClasses} bg-purple-600 text-white hover:bg-purple-700 ${activeButtonClasses}`}
         >
           📖 이야기 진행
         </button>
+      )}
+
+      {/* Story trigger - auto-progress when no roll was needed */}
+      {status === "complete" && isLastJudgment && isCurrentPlayer && !requiresRoll && (
+        <AutoProgressButton
+          onClick={onTriggerStory}
+          className={`${baseButtonClasses} bg-purple-600 text-white hover:bg-purple-700 ${activeButtonClasses}`}
+        >
+          📖 이야기 진행
+        </AutoProgressButton>
       )}
     </div>
   );

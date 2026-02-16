@@ -36,6 +36,7 @@ interface StoryEntryForRender {
   role: 'USER' | 'AI';
   content: string;
   judgments?: JudgmentSummary[] | null;
+  event_triggered?: boolean;
 }
 
 interface StoryEntryItemProps {
@@ -81,6 +82,13 @@ const StoryEntryItem = memo(function StoryEntryItem({
             : 'bg-white text-slate-700 border border-slate-200 rounded-tl-none font-serif'
         }`}
       >
+        {entry.role === 'AI' && entry.event_triggered && (
+          <div className="mb-2">
+            <span className="inline-block bg-amber-100 text-amber-800 text-[11px] font-bold px-2 py-0.5 rounded-full border border-amber-300">
+              돌발 이벤트 발생
+            </span>
+          </div>
+        )}
         {renderBoldText(entry.content)}
 
         {/* Show judgment results button for USER messages with judgments */}
@@ -118,6 +126,7 @@ export default function CenterPane() {
   
   const currentSession = useGameStore((state) => state.currentSession);
   const currentCharacter = useGameStore((state) => state.currentCharacter);
+  const isJudgmentModalOpen = useGameStore((state) => state.isJudgmentModalOpen);
   const setJudgmentModalOpen = useGameStore((state) => state.setJudgmentModalOpen);
   const emit = useSocketStore((state) => state.emit);
   
@@ -132,10 +141,17 @@ export default function CenterPane() {
   const isGenerating = useAIStore((state) => state.isGenerating);
   const judgments = useAIStore((state) => state.judgments);
   const currentNarrative = useAIStore((state) => state.currentNarrative);
+  const eventTriggered = useAIStore((state) => state.eventTriggered);
+  const currentSessionId = currentSession?.id ?? null;
   
   const storyEndRef = useRef<HTMLDivElement>(null);
-  const actionInputRef = useRef<HTMLInputElement>(null);
+  const actionInputRef = useRef<HTMLTextAreaElement>(null);
   const narrativeEndRef = useRef<HTMLDivElement>(null);
+  const socket = useSocketStore((state) => state.socket);
+  const isInitialLoadRef = useRef<boolean>(true);
+  const prevJudgmentModalOpenRef = useRef<boolean>(isJudgmentModalOpen);
+  const judgmentModalClosedAtRef = useRef<number | null>(null);
+  const pendingNarrativeStartScrollRef = useRef<boolean>(false);
   
   // Check if current user is host (number/string mismatch 안전 처리)
   const isHost =
@@ -164,8 +180,9 @@ export default function CenterPane() {
 
   // Load story logs on session change using getStoryLogs API
   useEffect(() => {
-    if (!currentSession) {
+    if (!currentSessionId) {
       setEntries([]);
+      isInitialLoadRef.current = false;
       return;
     }
 
@@ -173,36 +190,46 @@ export default function CenterPane() {
     useAIStore.getState().setGenerating(false);
     useAIStore.getState().clearCurrentNarrative();
 
+    // Mark next entries change as initial load for auto-scroll
+    isInitialLoadRef.current = true;
+
     let cancelled = false;
-    const sessionId = currentSession.id;
+    const sessionId = currentSessionId;
 
     getStoryLogs(sessionId)
       .then((data) => {
         if (!cancelled) {
           setEntries(data.logs);
+          if (isInitialLoadRef.current) {
+            requestAnimationFrame(() => {
+              storyEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+            });
+            isInitialLoadRef.current = false;
+          }
         }
       })
       .catch((error) => {
         if (!cancelled) {
           console.error('Failed to load story logs:', error);
+          isInitialLoadRef.current = false;
         }
       });
 
     return () => {
       cancelled = true;
     };
-  }, [currentSession, setEntries]);
+  }, [currentSessionId, setEntries]);
 
   // Load current act on session change
   const setCurrentAct = useActStore((state) => state.setCurrentAct);
   useEffect(() => {
-    if (!currentSession) {
+    if (!currentSessionId) {
       setCurrentAct(null);
       return;
     }
 
     let cancelled = false;
-    const sessionId = currentSession.id;
+    const sessionId = currentSessionId;
 
     getCurrentAct(sessionId)
       .then((act) => {
@@ -228,18 +255,19 @@ export default function CenterPane() {
     return () => {
       cancelled = true;
     };
-  }, [currentSession, setCurrentAct]);
+  }, [currentSessionId, setCurrentAct]);
 
   // Reload story logs when narrative streaming completes
-  const skipNextScrollRef = useRef<boolean>(false);
   useEffect(() => {
     const handleStoryLogsUpdated = (event: CustomEvent<{ session_id: number }>) => {
-      if (currentSession && event.detail.session_id === currentSession.id) {
-        // Skip scroll when reloading after narrative complete
-        skipNextScrollRef.current = true;
-        getStoryLogs(currentSession.id)
+      if (currentSessionId && event.detail.session_id === currentSessionId) {
+        getStoryLogs(currentSessionId)
           .then((data) => {
             setEntries(data.logs);
+            const aiState = useAIStore.getState();
+            if (!aiState.isGenerating && (aiState.currentNarrative.length > 0 || aiState.judgments.length > 0)) {
+              aiState.clearJudgments();
+            }
           })
           .catch((error) => {
             console.error('Failed to reload story logs:', error);
@@ -251,32 +279,68 @@ export default function CenterPane() {
     return () => {
       window.removeEventListener('story_logs_updated', handleStoryLogsUpdated as EventListener);
     };
-  }, [currentSession, setEntries]);
+  }, [currentSessionId, setEntries]);
 
-  // Auto-scroll to latest entry when entries change (skip after narrative complete)
+  // Track "just closed" timing for judgment modal.
   useEffect(() => {
-    if (skipNextScrollRef.current) {
-      skipNextScrollRef.current = false;
-      return;
+    const wasOpen = prevJudgmentModalOpenRef.current;
+    if (wasOpen && !isJudgmentModalOpen) {
+      judgmentModalClosedAtRef.current = Date.now();
     }
-    storyEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [entries]);
+    if (isJudgmentModalOpen) {
+      judgmentModalClosedAtRef.current = null;
+    }
+    prevJudgmentModalOpenRef.current = isJudgmentModalOpen;
+  }, [isJudgmentModalOpen]);
 
-  // Scroll to narrative start only once when streaming begins
-  const hasScrolledToNarrativeRef = useRef<boolean>(false);
+  // One-time scroll right after first narrative token arrives.
   useEffect(() => {
-    // Reset scroll flag when narrative is cleared
-    if (!currentNarrative) {
-      hasScrolledToNarrativeRef.current = false;
-      return;
-    }
-    
-    // Scroll only once when narrative first appears
-    if (currentNarrative && !hasScrolledToNarrativeRef.current && narrativeEndRef.current) {
-      hasScrolledToNarrativeRef.current = true;
-      narrativeEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
+    if (!pendingNarrativeStartScrollRef.current) return;
+    if (!currentNarrative) return;
+
+    requestAnimationFrame(() => {
+      storyEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    });
+    pendingNarrativeStartScrollRef.current = false;
   }, [currentNarrative]);
+
+  // Auto-scroll only right after streaming starts.
+  useEffect(() => {
+    if (!socket || !currentSessionId) return;
+
+    const shouldHandleStreamEvent = (eventSessionId?: number) => {
+      if (!eventSessionId) return true;
+      return eventSessionId === currentSessionId;
+    };
+
+    const scrollToBottom = () => {
+      requestAnimationFrame(() => {
+        storyEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      });
+    };
+
+    const handleStreamingStarted = (data?: { session_id?: number }) => {
+      if (!shouldHandleStreamEvent(data?.session_id)) return;
+      const modalOpenNow = useGameStore.getState().isJudgmentModalOpen;
+      const closedAt = judgmentModalClosedAtRef.current;
+      const closedRecently = closedAt !== null && Date.now() - closedAt <= 5000;
+      if (!modalOpenNow && !closedRecently) return;
+      pendingNarrativeStartScrollRef.current = true;
+      if (useAIStore.getState().currentNarrative) {
+        scrollToBottom();
+        pendingNarrativeStartScrollRef.current = false;
+      }
+      judgmentModalClosedAtRef.current = null;
+    };
+
+    socket.on('narrative_stream_started', handleStreamingStarted);
+    socket.on('story_generation_started', handleStreamingStarted);
+
+    return () => {
+      socket.off('narrative_stream_started', handleStreamingStarted);
+      socket.off('story_generation_started', handleStreamingStarted);
+    };
+  }, [socket, currentSessionId]);
 
   // Derive client-side judgment projection without mutating the story store.
   const displayEntries = useMemo(() => {
@@ -372,10 +436,28 @@ export default function CenterPane() {
     // Input will be disabled when host commits actions
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      handleSubmitAction();
-    }
+  const autoResizeActionInput = useCallback(() => {
+    const textarea = actionInputRef.current;
+    if (!textarea) return;
+
+    const maxHeight = 192; // about 8 lines with current typography
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`;
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? 'auto' : 'hidden';
+  }, []);
+
+  useEffect(() => {
+    autoResizeActionInput();
+  }, [actionText, autoResizeActionInput]);
+
+  const handleActionInputKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key !== 'Enter') return;
+    // Preserve IME composition behavior (Korean/Japanese/etc.)
+    if (e.nativeEvent.isComposing) return;
+    if (e.shiftKey) return; // Shift+Enter => newline
+
+    e.preventDefault();
+    handleSubmitAction();
   };
 
   return (
@@ -471,6 +553,13 @@ export default function CenterPane() {
                   던전 마스터
                 </div>
                 <div className="px-4 py-3 sm:px-6 sm:py-4 rounded-2xl shadow-sm text-sm leading-relaxed whitespace-pre-wrap max-w-full bg-white text-slate-700 border border-slate-200 rounded-tl-none font-serif">
+                  {eventTriggered && (
+                    <div className="mb-2">
+                      <span className="inline-block bg-amber-100 text-amber-800 text-[11px] font-bold px-2 py-0.5 rounded-full border border-amber-300">
+                        돌발 이벤트 발생
+                      </span>
+                    </div>
+                  )}
                   <span>{renderBoldText(currentNarrative)}</span>
                   {isGenerating && <span className="inline-block w-2 h-4 ml-0.5 bg-slate-400 animate-pulse align-middle" />}
                 </div>
@@ -490,16 +579,16 @@ export default function CenterPane() {
       {/* Action Input Section */}
       <div className="p-4 border-t border-slate-200 bg-white">
         <h3 className="text-xs font-bold text-slate-400 uppercase mb-2 ml-1">당신의 행동</h3>
-        <div className="flex gap-2">
+        <div className="flex items-end gap-2">
           <div className="relative flex-1">
-            <input
+            <textarea
               ref={actionInputRef}
-              type="text"
+              rows={1}
               value={actionText}
               onChange={(e) => setActionText(e.target.value)}
-              onKeyPress={handleKeyPress}
+              onKeyDown={handleActionInputKeyDown}
               placeholder={actionInputDisabled ? "운명이 펼쳐지고 있습니다..." : "행동을 설명하세요..."}
-              className="w-full bg-slate-50 text-slate-900 px-4 py-3 rounded-lg text-sm border border-slate-200 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 transition-all placeholder:text-slate-400 disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-slate-100"
+              className="w-full min-h-[48px] max-h-48 resize-none bg-slate-50 text-slate-900 px-4 py-3 rounded-lg text-sm border border-slate-200 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 transition-all placeholder:text-slate-400 disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-slate-100"
               disabled={actionInputDisabled || !currentSession || !currentCharacter}
             />
           </div>
@@ -514,6 +603,11 @@ export default function CenterPane() {
         </div>
         
         <div className="h-5 mt-1 flex items-center justify-between px-1">
+            {!actionInputDisabled && (
+            <span className="text-[11px] text-slate-400">
+                Enter 제출, Shift+Enter 줄바꿈
+            </span>
+            )}
             {actionInputDisabled && (
             <span className="text-[11px] text-yellow-600 font-medium flex items-center gap-1.5 animate-pulse">
                 <span className="w-1.5 h-1.5 bg-yellow-600 rounded-full"></span>

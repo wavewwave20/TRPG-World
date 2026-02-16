@@ -137,6 +137,9 @@ export function registerJudgmentHandlers(socket: Socket) {
   });
 
   // Dice rolled - show result to all participants
+  // Animation duration: keep status 'rolling' while animation plays, then transition to 'complete'
+  const DICE_ANIMATION_DURATION_MS = 2500;
+
   socket.on('dice_rolled', (data: {
     session_id: number;
     character_id: number;
@@ -150,23 +153,49 @@ export function registerJudgmentHandlers(socket: Socket) {
     requires_roll?: boolean;
   }) => {
     const isAutoSuccess = data.outcome === 'auto_success';
+    const outcomeReasoning = isAutoSuccess
+      ? '위험이나 대립이 없는 행동으로, 자동으로 성공합니다.'
+      : `주사위 ${data.dice_result} + 보정치 ${data.modifier} = ${data.final_value} vs DC ${data.difficulty}`;
 
-    useAIStore.getState().updateJudgmentResult(data.judgment_id, {
+    const finalizeJudgmentForPlayer = () => {
+      try {
+        useAIStore.getState().setLastDiceRolledAt(Date.now());
+        const myChar = useGameStore.getState().currentCharacter;
+        if (myChar && myChar.id === data.character_id) {
+          useAIStore.getState().setAckRequired(data.judgment_id);
+        }
+      } catch { /* ignore */ }
+    };
+
+    const judgmentResultPayload = {
       dice_result: data.dice_result,
       final_value: data.final_value,
       outcome: data.outcome,
-      outcome_reasoning: isAutoSuccess
-        ? '위험이나 대립이 없는 행동으로, 자동으로 성공합니다.'
-        : `주사위 ${data.dice_result} + 보정치 ${data.modifier} = ${data.final_value} vs DC ${data.difficulty}`,
-      status: 'complete',
-    });
-    try {
-      useAIStore.getState().setLastDiceRolledAt(Date.now());
-      const myChar = useGameStore.getState().currentCharacter;
-      if (myChar && myChar.id === data.character_id) {
-        useAIStore.getState().setAckRequired(data.judgment_id);
-      }
-    } catch { /* ignore */ }
+      outcome_reasoning: outcomeReasoning,
+    };
+
+    if (isAutoSuccess) {
+      // Auto-success has no roll animation; complete immediately.
+      useAIStore.getState().updateJudgmentResult(data.judgment_id, {
+        ...judgmentResultPayload,
+        status: 'complete',
+      });
+      finalizeJudgmentForPlayer();
+    } else {
+      // Keep status 'rolling' while DiceRollAnimation plays.
+      useAIStore.getState().updateJudgmentResult(data.judgment_id, {
+        ...judgmentResultPayload,
+        status: 'rolling',
+      });
+
+      // After animation completes, transition to 'complete' and enable interaction
+      setTimeout(() => {
+        useAIStore.getState().updateJudgmentResult(data.judgment_id, {
+          status: 'complete',
+        });
+        finalizeJudgmentForPlayer();
+      }, DICE_ANIMATION_DURATION_MS);
+    }
 
     const outcomeText: Record<string, string> = {
       critical_failure: '대실패!',
