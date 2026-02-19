@@ -310,6 +310,7 @@ def _parse_growth_rewards(
         data = data.get("rewards", [data])
 
     valid_char_ids = {c.id for c in characters}
+    char_name_map = {c.id: c.name for c in characters}
     rewards = []
 
     for item in data:
@@ -332,6 +333,21 @@ def _parse_growth_rewards(
                 narrative_reason=item.get("narrative_reason", ""),
             )
         )
+
+    # Fallback: 모든 캐릭터에 최소 1개 ability_increase 보장
+    chars_with_reward = {r.character_id for r in rewards if r.growth_type == "ability_increase"}
+    for char in characters:
+        if char.id not in chars_with_reward:
+            logger.warning(f"캐릭터 {char.name}(ID:{char.id})에 ability_increase 없음, fallback 추가")
+            rewards.append(
+                GrowthReward(
+                    character_id=char.id,
+                    character_name=char_name_map.get(char.id, ""),
+                    growth_type="ability_increase",
+                    growth_detail={"ability": "constitution", "delta": 1},
+                    narrative_reason=f"{char_name_map.get(char.id, '모험가')}는 이번 막의 여정을 통해 한층 단련되었다.",
+                )
+            )
 
     return rewards
 

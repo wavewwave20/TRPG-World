@@ -26,3 +26,11 @@ export interface ActTransitionResult {
   newAct: StoryActInfo;
   growthRewards: GrowthReward[];
 }
+
+export interface ActGrowthHistory {
+  actId: number;
+  actNumber: number;
+  actTitle: string;
+  actSubtitle: string | null;
+  rewards: GrowthReward[];
+}

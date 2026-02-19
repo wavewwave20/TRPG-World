@@ -18,24 +18,43 @@
 - 아무 연관 없는 스킬 부여
 - 겪지 않은 약점의 완화
 
-## 보상 유형
+## 보상 규칙
 
-각 캐릭터에게 **정확히 1개**의 보상을 부여합니다. 가장 서사에 맞는 유형을 선택하세요.
+캐릭터당 **1~3개** 보상을 부여합니다. 아래 규칙을 따르세요.
 
-### 1. `ability_increase` — 능력치 상승
+### 1. 기본 보상 (필수, 캐릭터당 1개)
+- `ability_increase`: 이번 막에서 가장 활약한 능력치 +1
+- 모든 캐릭터에게 반드시 1개씩 부여
+
+### 2. 높은 기여도 보상 (선택, 캐릭터당 0~1개)
+- 이번 막에서 특별히 활약하거나 중요한 역할을 한 캐릭터에게 추가 `ability_increase` +1
+- **기본 보상과 다른 능력치**여야 합니다
+- 활약이 보통이면 생략
+
+### 3. 새 스킬 습득 (선택, 캐릭터당 0~1개)
+- 스토리에서 반복적으로 특정 행동을 했거나, 극적인 경험을 한 캐릭터에게 부여
+- 자연스러운 경우에만 부여하고, 억지로 부여하지 마세요
+
+### 4. 약점 완화 (선택)
+- 약점과 관련된 상황을 겪고 극복한 캐릭터에게 부여
+- **반드시 캐릭터가 가진 약점만** 완화 가능
+- mitigation이 3 이상이 되면 서사적으로 극복한 것으로 간주
+
+## 보상 유형 상세
+
+### `ability_increase` — 능력치 상승
 - 해당 능력치를 +1 올립니다 (최대 20)
 - `growth_detail`: `{"ability": "strength", "delta": 1}`
 - 이미 20인 능력치는 선택하지 마세요
 
-### 2. `new_skill` — 새 스킬 습득
+### `new_skill` — 새 스킬 습득
 - 경험을 통해 자연스럽게 배운 스킬
 - `growth_detail`: `{"skill": {"type": "passive", "name": "함정 감지", "description": "함정의 존재를 본능적으로 감지한다", "ability": "wisdom"}}`
 - 기존 스킬과 중복되지 않게 하세요
 
-### 3. `weakness_mitigated` — 약점 완화
+### `weakness_mitigated` — 약점 완화
 - 약점을 **제거하지 않고 완화**합니다 (mitigation +1)
 - `growth_detail`: `{"weakness": "어둠 공포", "mitigation_delta": 1}`
-- mitigation이 3 이상이 되면 서사적으로 극복한 것으로 간주됩니다
 - **반드시 캐릭터가 가진 약점만** 완화할 수 있습니다
 
 ## 출력 형식
@@ -52,6 +71,20 @@
     "narrative_reason": "수많은 전투를 치르며 카엘의 팔에 단단한 근육이 자리잡았다."
   },
   {
+    "character_id": 1,
+    "character_name": "카엘",
+    "growth_type": "new_skill",
+    "growth_detail": {"skill": {"type": "passive", "name": "전장의 감각", "description": "전투 경험으로 적의 약점을 본능적으로 간파한다", "ability": "wisdom"}},
+    "narrative_reason": "끊임없는 전투 속에서 카엘은 적의 움직임을 읽는 감각을 키웠다."
+  },
+  {
+    "character_id": 2,
+    "character_name": "리나",
+    "growth_type": "ability_increase",
+    "growth_detail": {"ability": "wisdom", "delta": 1},
+    "narrative_reason": "동료들을 이끌며 상황을 판단하는 눈이 한층 성숙해졌다."
+  },
+  {
     "character_id": 2,
     "character_name": "리나",
     "growth_type": "weakness_mitigated",
@@ -61,5 +94,6 @@
 ]
 ```
 
+- 같은 캐릭터에 대해 여러 보상이 가능합니다 (위 예시 참고).
 - `narrative_reason`은 한국어로 1~2문장, 서사적이고 감성적으로 작성합니다.
-- 반드시 모든 참가 캐릭터에 대해 하나씩 보상을 부여합니다.
+- 반드시 모든 참가 캐릭터에 대해 최소 1개의 `ability_increase` 보상을 부여합니다.

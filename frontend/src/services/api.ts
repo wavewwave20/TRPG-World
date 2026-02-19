@@ -563,3 +563,43 @@ export async function testModelConnection(
     method: 'POST',
   });
 }
+
+// ============================================================================
+// Growth History API
+// ============================================================================
+
+import type { ActGrowthHistory } from '../types/act';
+
+interface GrowthHistoryRaw {
+  act_id: number;
+  act_number: number;
+  act_title: string;
+  act_subtitle: string | null;
+  rewards: Array<{
+    character_id: number;
+    character_name: string;
+    growth_type: string;
+    growth_detail: Record<string, any>;
+    narrative_reason: string;
+  }>;
+}
+
+export async function getGrowthHistory(
+  sessionId: number
+): Promise<ActGrowthHistory[]> {
+  const url = `${API_BASE_URL}/api/sessions/${sessionId}/growth-history`;
+  const raw = await fetchWithErrorHandling<GrowthHistoryRaw[]>(url);
+  return raw.map((item) => ({
+    actId: item.act_id,
+    actNumber: item.act_number,
+    actTitle: item.act_title,
+    actSubtitle: item.act_subtitle,
+    rewards: item.rewards.map((r) => ({
+      characterId: r.character_id,
+      characterName: r.character_name,
+      growthType: r.growth_type as 'ability_increase' | 'new_skill' | 'weakness_mitigated',
+      growthDetail: r.growth_detail,
+      narrativeReason: r.narrative_reason,
+    })),
+  }));
+}

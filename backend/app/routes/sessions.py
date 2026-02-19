@@ -573,3 +573,56 @@ def get_session_acts(session_id: int, db: Session = Depends(get_db)):
 
     acts = get_all_acts(db, session_id)
     return [act.model_dump() for act in acts]
+
+
+@router.get("/{session_id}/growth-history")
+def get_growth_history(session_id: int, db: Session = Depends(get_db)):
+    """세션의 성장 보상 기록을 act별로 그룹화하여 반환합니다."""
+    logs = (
+        db.query(CharacterGrowthLog)
+        .filter(CharacterGrowthLog.session_id == session_id)
+        .order_by(CharacterGrowthLog.applied_at.asc())
+        .all()
+    )
+    if not logs:
+        return []
+
+    # 캐릭터 이름 resolve
+    char_ids = {log.character_id for log in logs}
+    char_name_map = {
+        c.id: c.name
+        for c in db.query(Character).filter(Character.id.in_(char_ids)).all()
+    }
+
+    # act 정보 resolve
+    act_ids = {log.act_id for log in logs}
+    acts = {
+        a.id: a
+        for a in db.query(StoryAct).filter(StoryAct.id.in_(act_ids)).all()
+    }
+
+    # act별 그룹화
+    from collections import defaultdict
+    grouped: dict[int, list] = defaultdict(list)
+    for log in logs:
+        grouped[log.act_id].append({
+            "character_id": log.character_id,
+            "character_name": char_name_map.get(log.character_id, f"캐릭터 {log.character_id}"),
+            "growth_type": log.growth_type,
+            "growth_detail": log.growth_detail,
+            "narrative_reason": log.narrative_reason,
+        })
+
+    result = []
+    for act_id, rewards in grouped.items():
+        act = acts.get(act_id)
+        result.append({
+            "act_id": act_id,
+            "act_number": act.act_number if act else 0,
+            "act_title": act.title if act else "???",
+            "act_subtitle": act.subtitle if act else None,
+            "rewards": rewards,
+        })
+
+    result.sort(key=lambda x: x["act_number"])
+    return result

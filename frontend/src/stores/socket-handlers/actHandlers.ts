@@ -2,6 +2,7 @@ import type { Socket } from 'socket.io-client';
 import type { StoryActInfo, GrowthReward } from '../../types/act';
 import { useGameStore } from '../gameStore';
 import { useActStore } from '../actStore';
+import { getGrowthHistory } from '../../services/api';
 
 export function registerActHandlers(socket: Socket) {
   // New act started (game start or act transition)
@@ -67,6 +68,11 @@ export function registerActHandlers(socket: Socket) {
       type: 'system',
       message: `${data.completed_act.act_number}막 완료! ${newAct.actNumber}막 — ${newAct.title} 시작`,
     });
+
+    // 성장 기록 갱신
+    getGrowthHistory(data.session_id)
+      .then((history) => useActStore.getState().setGrowthHistory(history))
+      .catch((err) => console.error('Failed to load growth history:', err));
   });
 
   // Character growth applied (per character notification)

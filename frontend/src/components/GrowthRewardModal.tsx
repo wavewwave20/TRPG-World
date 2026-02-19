@@ -69,8 +69,15 @@ export default function GrowthRewardModal() {
   const showGrowthModal = useActStore((state) => state.showGrowthModal);
   const growthRewards = useActStore((state) => state.growthRewards);
   const setShowGrowthModal = useActStore((state) => state.setShowGrowthModal);
+  const selectedHistoryActId = useActStore((state) => state.selectedHistoryActId);
+  const growthHistory = useActStore((state) => state.growthHistory);
 
   if (!showGrowthModal || growthRewards.length === 0) return null;
+
+  // 기록에서 열었을 때 act 정보 표시
+  const historyEntry = selectedHistoryActId
+    ? growthHistory.find((h) => h.actId === selectedHistoryActId)
+    : null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -85,7 +92,9 @@ export default function GrowthRewardModal() {
         {/* Header */}
         <div className="px-6 py-4 bg-gradient-to-r from-amber-50 to-yellow-50 border-b border-amber-200/60 text-center">
           <div className="text-xs font-bold text-amber-700 uppercase tracking-widest mb-1">
-            막 전환 완료
+            {historyEntry
+              ? `${historyEntry.actNumber}막 — ${historyEntry.actTitle}`
+              : '막 전환 완료'}
           </div>
           <h2 className="text-lg font-bold text-slate-800">
             성장 보상
