@@ -1049,11 +1049,13 @@ def register_handlers(sio):
                 await sio.emit("error", {"message": "세션을 찾을 수 없습니다"}, to=sid)
                 return
 
+            instruction = (session.host_instruction or "").strip()
             director = get_story_director_service()
-            instruction = director.get_host_instruction(
+            director.set_host_instruction(
                 session_id=session_id,
                 world_context=session.world_prompt or "",
                 ai_summary=session.ai_summary,
+                instruction=instruction,
             )
             await sio.emit(
                 "story_instruction_data",
@@ -1092,6 +1094,9 @@ def register_handlers(sio):
             if presence.get("user_id") != session.host_user_id:
                 await sio.emit("error", {"message": "호스트만 설정할 수 있습니다"}, to=sid)
                 return
+
+            session.host_instruction = instruction
+            db.commit()
 
             director = get_story_director_service()
             state = director.set_host_instruction(

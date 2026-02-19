@@ -50,6 +50,7 @@ class GameSession(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     event_probability = Column(Float, default=0.00, nullable=False, server_default="0.00")
+    host_instruction = Column(Text, nullable=False, default="", server_default="")
 
 
 class Character(Base):
@@ -141,6 +142,36 @@ class StoryLog(Base):
     judgments_data = Column(JSON, nullable=True)  # 판정 결과 스냅샷 (USER 메시지 전용)
     event_triggered = Column(Boolean, default=False, nullable=False)  # 돌발이벤트 발생 여부
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class StoryFlowMetric(Base):
+    """스토리 흐름 품질 계측 로그.
+
+    LLM 추가 호출 없이 턴 단위 핵심 지표를 저장합니다.
+    """
+
+    __tablename__ = "story_flow_metrics"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, ForeignKey("game_sessions.id"), nullable=False, index=True)
+    story_log_id = Column(Integer, ForeignKey("story_logs.id"), nullable=True, index=True)
+    act_id = Column(Integer, ForeignKey("story_acts.id"), nullable=True, index=True)
+    source = Column(String(32), nullable=False)  # phase3|stream|regenerate
+
+    tension = Column(Integer, nullable=False, default=45)
+    consecutive_crisis = Column(Integer, nullable=False, default=0)
+
+    judgments_count = Column(Integer, nullable=False, default=0)
+    failure_count = Column(Integer, nullable=False, default=0)
+    critical_failure_count = Column(Integer, nullable=False, default=0)
+    success_count = Column(Integer, nullable=False, default=0)
+    critical_success_count = Column(Integer, nullable=False, default=0)
+    auto_success_count = Column(Integer, nullable=False, default=0)
+
+    host_instruction_enabled = Column(Boolean, nullable=False, default=False)
+    host_instruction_length = Column(Integer, nullable=False, default=0)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
 
 
 class StoryAct(Base):

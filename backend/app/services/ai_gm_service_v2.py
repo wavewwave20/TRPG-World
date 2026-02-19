@@ -19,7 +19,15 @@ from typing import AsyncIterator
 
 from sqlalchemy.orm import Session
 
-from app.models import ActionJudgment, Character, CharacterGrowthLog, GameSession, StoryAct, StoryLog
+from app.models import (
+    ActionJudgment,
+    Character,
+    CharacterGrowthLog,
+    GameSession,
+    StoryAct,
+    StoryFlowMetric,
+    StoryLog,
+)
 from app.schemas import (
     ActionAnalysis,
     ActTransitionResult,
@@ -223,6 +231,11 @@ class AIGMServiceV2:
                 if act.subtitle:
                     act_context += f": {act.subtitle}"
 
+            self._sync_host_instruction_from_session(
+                session_id=session_id,
+                world_context=game_context.world_prompt,
+                ai_summary=game_context.ai_summary,
+            )
             director_service = get_story_director_service()
             director_guidance = director_service.build_guidance(
                 session_id=session_id,
@@ -257,7 +270,14 @@ class AIGMServiceV2:
             logger.debug(f"이야기 생성 완료: {len(narrative)}자")
 
             # 데이터베이스에 저장
-            self._save_results(session_id=session_id, judgments=judgments, narrative=narrative)
+            saved_story_log = self._save_results(session_id=session_id, judgments=judgments, narrative=narrative)
+            self._log_story_flow_metric(
+                session_id=session_id,
+                source="phase3",
+                judgments=judgments,
+                story_log_id=saved_story_log.id,
+                act_id=saved_story_log.act_id,
+            )
 
             logger.info("Phase 3 완료: 이야기 DB 저장됨")
 
@@ -282,6 +302,67 @@ class AIGMServiceV2:
         except Exception as e:
             logger.error(f"Phase 3 실패: {e}", exc_info=True)
             raise ValueError(f"서술 생성 실패: {e!s}") from e
+
+    def _sync_host_instruction_from_session(
+        self,
+        session_id: int,
+        world_context: str,
+        ai_summary: str | None,
+    ) -> None:
+        """DB의 호스트 지시사항을 StoryDirector 메모리 상태에 동기화합니다."""
+        session = self.db.query(GameSession).filter(GameSession.id == session_id).first()
+        instruction = (session.host_instruction or "").strip() if session else ""
+        director_service = get_story_director_service()
+        director_service.set_host_instruction(
+            session_id=session_id,
+            world_context=world_context,
+            ai_summary=ai_summary,
+            instruction=instruction,
+        )
+
+    def _log_story_flow_metric(
+        self,
+        session_id: int,
+        source: str,
+        judgments: list[JudgmentResult],
+        story_log_id: int | None = None,
+        act_id: int | None = None,
+    ) -> None:
+        """스토리 흐름 품질 계측 데이터를 DB에 기록합니다."""
+        try:
+            director = get_story_director_service().get_or_create_state(session_id, world_context="", ai_summary=None)
+
+            failure_count = sum(1 for j in judgments if j.outcome == JudgmentOutcome.FAILURE)
+            critical_failure_count = sum(1 for j in judgments if j.outcome == JudgmentOutcome.CRITICAL_FAILURE)
+            success_count = sum(1 for j in judgments if j.outcome == JudgmentOutcome.SUCCESS)
+            critical_success_count = sum(1 for j in judgments if j.outcome == JudgmentOutcome.CRITICAL_SUCCESS)
+            auto_success_count = sum(1 for j in judgments if j.outcome == JudgmentOutcome.AUTO_SUCCESS)
+
+            metric = StoryFlowMetric(
+                session_id=session_id,
+                story_log_id=story_log_id,
+                act_id=act_id,
+                source=source,
+                tension=director.tension,
+                consecutive_crisis=director.consecutive_crisis,
+                judgments_count=len(judgments),
+                failure_count=failure_count,
+                critical_failure_count=critical_failure_count,
+                success_count=success_count,
+                critical_success_count=critical_success_count,
+                auto_success_count=auto_success_count,
+                host_instruction_enabled=bool((director.host_instruction or "").strip()),
+                host_instruction_length=len((director.host_instruction or "").strip()),
+                created_at=datetime.utcnow(),
+            )
+            self.db.add(metric)
+            self.db.commit()
+            logger.debug(
+                f"StoryFlowMetric logged: session={session_id}, source={source}, story_log_id={story_log_id}, tension={metric.tension}"
+            )
+        except Exception as e:
+            self.db.rollback()
+            logger.warning(f"StoryFlowMetric 기록 실패: {e}")
 
     async def regenerate_latest_story(self, session_id: int) -> StoryLog:
         """최근 AI 스토리 로그를 같은 행동/판정 결과로 재생성합니다."""
@@ -376,6 +457,14 @@ class AIGMServiceV2:
             latest_ai_log.event_triggered = bool(metadata.get("event_triggered"))
         self.db.commit()
         self.db.refresh(latest_ai_log)
+
+        self._log_story_flow_metric(
+            session_id=session_id,
+            source="regenerate",
+            judgments=judgments,
+            story_log_id=latest_ai_log.id,
+            act_id=latest_ai_log.act_id,
+        )
 
         return latest_ai_log
 
@@ -624,6 +713,16 @@ class AIGMServiceV2:
                 if act.subtitle:
                     act_context += f": {act.subtitle}"
 
+            self._sync_host_instruction_from_session(
+                session_id=session_id,
+                world_context=game_context.world_prompt,
+                ai_summary=game_context.ai_summary,
+            )
+            self._sync_host_instruction_from_session(
+                session_id=session_id,
+                world_context=game_context.world_prompt,
+                ai_summary=game_context.ai_summary,
+            )
             director_service = get_story_director_service()
             director_guidance = director_service.build_guidance(
                 session_id=session_id,
@@ -962,12 +1061,41 @@ class AIGMServiceV2:
 
             logger.info(f"이야기 DB 저장: story_log_id={story_log.id}, {len(judgments)}개 판정 phase=3으로 업데이트")
 
+            metric_judgments: list[JudgmentResult] = []
+            for j in judgments:
+                if not j.outcome:
+                    continue
+                try:
+                    outcome = JudgmentOutcome(j.outcome)
+                except Exception:
+                    continue
+                metric_judgments.append(
+                    JudgmentResult(
+                        character_id=j.character_id,
+                        action_text=j.action_text,
+                        dice_result=j.dice_result or 0,
+                        modifier=j.modifier,
+                        final_value=j.final_value or j.modifier,
+                        difficulty=j.difficulty,
+                        outcome=outcome,
+                        outcome_reasoning=j.difficulty_reasoning or "",
+                    )
+                )
+
+            self._log_story_flow_metric(
+                session_id=session_id,
+                source="stream",
+                judgments=metric_judgments,
+                story_log_id=story_log.id,
+                act_id=story_log.act_id,
+            )
+
         except Exception as e:
             logger.error(f"이야기 DB 저장 실패: {e}", exc_info=True)
             self.db.rollback()
             raise
 
-    def _save_results(self, session_id: int, judgments: list[JudgmentResult], narrative: str) -> None:
+    def _save_results(self, session_id: int, judgments: list[JudgmentResult], narrative: str) -> StoryLog:
         """
         판정 결과와 서술을 데이터베이스에 저장합니다.
 
@@ -1014,6 +1142,7 @@ class AIGMServiceV2:
             self.db.commit()
 
             logger.debug(f"DB 저장 완료: 스토리 로그 1개, 판정 {len(judgments)}개")
+            return story_log
 
         except Exception as e:
             logger.error(f"결과 저장 실패: {e}", exc_info=True)
