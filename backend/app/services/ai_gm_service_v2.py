@@ -19,7 +19,7 @@ from typing import AsyncIterator
 
 from sqlalchemy.orm import Session
 
-from app.models import ActionJudgment, Character, GameSession, StoryAct, StoryLog
+from app.models import ActionJudgment, Character, CharacterGrowthLog, GameSession, StoryAct, StoryLog
 from app.schemas import (
     ActionAnalysis,
     ActTransitionResult,
@@ -37,6 +37,7 @@ from app.services.background_task_manager import get_task_manager
 from app.services.context_loader import ContextLoadError, GameContext, load_game_context
 from app.services.dice_system import DiceSystem
 from app.services.session_state_manager import get_session_state_manager
+from app.services.story_director import get_story_director_service
 from app.services.stream_buffer import get_buffer_manager
 from app.services.act_resolver import resolve_current_open_act
 
@@ -222,6 +223,14 @@ class AIGMServiceV2:
                 if act.subtitle:
                     act_context += f": {act.subtitle}"
 
+            director_service = get_story_director_service()
+            director_guidance = director_service.build_guidance(
+                session_id=session_id,
+                world_context=game_context.world_prompt,
+                ai_summary=game_context.ai_summary,
+                judgments=judgments,
+            )
+
             raw_narrative = await generate_narrative(
                 judgments=judgments,
                 characters=game_context.characters,
@@ -230,10 +239,20 @@ class AIGMServiceV2:
                 llm_model=self.llm_model,
                 act_context=act_context,
                 ai_summary=game_context.ai_summary,
+                director_guidance=director_guidance,
             )
 
             # XML 파싱: clean narrative + metadata 분리
             narrative, metadata = parse_narrative_xml(raw_narrative)
+
+            # Story Director 상태 확정 반영 (tension/arc)
+            director_service.commit_after_narrative(
+                session_id=session_id,
+                world_context=game_context.world_prompt,
+                ai_summary=game_context.ai_summary,
+                judgments=judgments,
+                metadata=metadata,
+            )
 
             logger.debug(f"이야기 생성 완료: {len(narrative)}자")
 
@@ -263,6 +282,102 @@ class AIGMServiceV2:
         except Exception as e:
             logger.error(f"Phase 3 실패: {e}", exc_info=True)
             raise ValueError(f"서술 생성 실패: {e!s}") from e
+
+    async def regenerate_latest_story(self, session_id: int) -> StoryLog:
+        """최근 AI 스토리 로그를 같은 행동/판정 결과로 재생성합니다."""
+        latest_ai_log = (
+            self.db.query(StoryLog)
+            .filter(StoryLog.session_id == session_id, StoryLog.role == "AI")
+            .order_by(StoryLog.id.desc())
+            .first()
+        )
+        if not latest_ai_log:
+            raise ValueError("재생성할 AI 스토리 로그가 없습니다")
+
+        judgment_rows = (
+            self.db.query(ActionJudgment)
+            .filter(ActionJudgment.session_id == session_id, ActionJudgment.story_log_id == latest_ai_log.id)
+            .order_by(ActionJudgment.id.asc())
+            .all()
+        )
+        if not judgment_rows:
+            raise ValueError("최근 스토리에 연결된 판정 결과가 없어 재생성할 수 없습니다")
+
+        judgments: list[JudgmentResult] = []
+        for row in judgment_rows:
+            if row.outcome is None:
+                continue
+            try:
+                outcome = JudgmentOutcome(row.outcome)
+            except Exception:
+                logger.warning(f"알 수 없는 판정 결과 값 스킵: {row.outcome}")
+                continue
+
+            judgments.append(
+                JudgmentResult(
+                    character_id=row.character_id,
+                    action_text=row.action_text,
+                    dice_result=row.dice_result if row.dice_result is not None else 1,
+                    modifier=row.modifier,
+                    final_value=row.final_value if row.final_value is not None else row.modifier,
+                    difficulty=row.difficulty,
+                    outcome=outcome,
+                    outcome_reasoning=row.difficulty_reasoning or "",
+                )
+            )
+
+        if not judgments:
+            raise ValueError("유효한 판정 결과가 없어 재생성할 수 없습니다")
+
+        game_context = load_game_context(
+            db=self.db,
+            session_id=session_id,
+            system_prompt="",
+        )
+
+        act_context = None
+        if game_context.current_act:
+            act = game_context.current_act
+            act_context = f"{act.act_number}막 — {act.title}"
+            if act.subtitle:
+                act_context += f": {act.subtitle}"
+
+        director_service = get_story_director_service()
+        director_guidance = director_service.build_guidance(
+            session_id=session_id,
+            world_context=game_context.world_prompt,
+            ai_summary=game_context.ai_summary,
+            judgments=judgments,
+        )
+
+        raw_narrative = await generate_narrative(
+            judgments=judgments,
+            characters=game_context.characters,
+            world_context=game_context.world_prompt,
+            story_history=game_context.story_history,
+            llm_model=self.llm_model,
+            act_context=act_context,
+            ai_summary=game_context.ai_summary,
+            director_guidance=director_guidance,
+        )
+
+        narrative, metadata = parse_narrative_xml(raw_narrative)
+
+        director_service.commit_after_narrative(
+            session_id=session_id,
+            world_context=game_context.world_prompt,
+            ai_summary=game_context.ai_summary,
+            judgments=judgments,
+            metadata=metadata,
+        )
+
+        latest_ai_log.content = narrative
+        if metadata is not None and "event_triggered" in metadata:
+            latest_ai_log.event_triggered = bool(metadata.get("event_triggered"))
+        self.db.commit()
+        self.db.refresh(latest_ai_log)
+
+        return latest_ai_log
 
     def _judge_dice_results(self, dice_results: list[DiceResult]) -> list[JudgmentResult]:
         """
@@ -509,6 +624,14 @@ class AIGMServiceV2:
                 if act.subtitle:
                     act_context += f": {act.subtitle}"
 
+            director_service = get_story_director_service()
+            director_guidance = director_service.build_guidance(
+                session_id=session_id,
+                world_context=game_context.world_prompt,
+                ai_summary=game_context.ai_summary,
+                judgments=judgments,
+            )
+
             # LLM 스트리밍 호출
             token_count = 0
             async for token in generate_narrative_streaming(
@@ -520,6 +643,7 @@ class AIGMServiceV2:
                 act_context=act_context,
                 ai_summary=game_context.ai_summary,
                 event_triggered=event_triggered,
+                director_guidance=director_guidance,
             ):
                 # 버퍼에 토큰 추가
                 success = await buffer.add_token(token)
@@ -532,6 +656,15 @@ class AIGMServiceV2:
             # XML 파싱: 메타데이터 추출
             raw_text = buffer.get_full_text()
             narrative, metadata = parse_narrative_xml(raw_text)
+
+            # Story Director 상태 확정 반영 (tension/arc)
+            director_service.commit_after_narrative(
+                session_id=session_id,
+                world_context=game_context.world_prompt,
+                ai_summary=game_context.ai_summary,
+                judgments=judgments,
+                metadata=metadata,
+            )
 
             # 메타데이터를 버퍼에 저장 (핸들러에서 참조)
             buffer.set_metadata(metadata)
@@ -1028,9 +1161,10 @@ class AIGMServiceV2:
             llm_model=self.llm_model,
         )
 
-        # 성장 보상 적용
+        # 성장 보상 적용 + DB 저장
         for reward in growth_rewards:
             self._apply_growth_reward(reward)
+        self._persist_growth_rewards(session_id, current_act_db.id, growth_rewards)
 
         # Act 종료 시점에만 ai_summary 갱신
         session = self.db.query(GameSession).filter(GameSession.id == session_id).first()
@@ -1159,9 +1293,10 @@ class AIGMServiceV2:
             llm_model=self.llm_model,
         )
 
-        # 성장 보상 적용
+        # 성장 보상 적용 + DB 저장
         for reward in growth_rewards:
             self._apply_growth_reward(reward)
+        self._persist_growth_rewards(session_id, current_act_db.id, growth_rewards)
 
         # ai_summary 갱신
         session = self.db.query(GameSession).filter(GameSession.id == session_id).first()
@@ -1283,3 +1418,21 @@ class AIGMServiceV2:
 
         character.data = data
         flag_modified(character, "data")
+
+    def _persist_growth_rewards(
+        self, session_id: int, act_id: int, rewards: list[GrowthReward]
+    ) -> None:
+        """성장 보상을 CharacterGrowthLog에 저장합니다."""
+        for reward in rewards:
+            self.db.add(
+                CharacterGrowthLog(
+                    session_id=session_id,
+                    act_id=act_id,
+                    character_id=reward.character_id,
+                    growth_type=reward.growth_type,
+                    growth_detail=reward.growth_detail,
+                    narrative_reason=reward.narrative_reason,
+                    applied_at=datetime.utcnow(),
+                )
+            )
+        logger.info(f"세션 {session_id}: 성장 보상 {len(rewards)}개 DB 저장")

@@ -223,15 +223,6 @@ export default function ModerationModal({ isOpen, onClose, hostUserId }: Moderat
     })
   );
   
-  // Emit get_queue event when modal opens
-  useEffect(() => {
-    if (isOpen && currentSession) {
-      setQueueLoadError(false);
-      setErrorMessage(null);
-      emit('get_queue', { session_id: currentSession.id });
-    }
-  }, [isOpen, currentSession, emit]);
-  
   // Retry loading queue
   const handleRetryLoadQueue = () => {
     if (currentSession) {
@@ -245,14 +236,24 @@ export default function ModerationModal({ isOpen, onClose, hostUserId }: Moderat
   useEffect(() => {
     const handleQueueData = (data: { actions: Action[] }) => {
       setActions(data.actions);
+      useActionStore.getState().setQueueCount(data.actions.length);
+      setQueueLoadError(false);
     };
-    
+
     on('queue_data', handleQueueData);
-    
+
+    // IMPORTANT: request queue only after listener is attached
+    // to avoid missing fast queue_data responses.
+    if (isOpen && currentSession) {
+      setQueueLoadError(false);
+      setErrorMessage(null);
+      emit('get_queue', { session_id: currentSession.id });
+    }
+
     return () => {
       off('queue_data', handleQueueData);
     };
-  }, [on, off]);
+  }, [on, off, isOpen, currentSession, emit]);
   
   // Listen for queue_updated event
   useEffect(() => {

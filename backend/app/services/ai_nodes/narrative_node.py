@@ -142,6 +142,7 @@ async def generate_narrative(
     act_context: str | None = None,
     ai_summary: str | None = None,
     event_triggered: bool | None = None,
+    director_guidance: str | None = None,
 ) -> str:
     """
     판정 결과를 바탕으로 스토리 서술을 생성합니다.
@@ -225,6 +226,10 @@ async def generate_narrative(
         judgment_list.append(judgment_text)
     context_parts.append("## 판정 결과\n\n" + "\n\n".join(judgment_list))
 
+    # Story Director 규칙 가이드 (하단 배치)
+    if director_guidance:
+        context_parts.append(director_guidance)
+
     context_text = "\n\n".join(context_parts)
 
     # ChatPromptTemplate 구성
@@ -292,6 +297,7 @@ async def generate_narrative_streaming(
     act_context: str | None = None,
     ai_summary: str | None = None,
     event_triggered: bool | None = None,
+    director_guidance: str | None = None,
 ) -> AsyncIterator[str]:
     """
     판정 결과를 바탕으로 스토리 서술을 스트리밍으로 생성합니다.
@@ -377,6 +383,10 @@ async def generate_narrative_streaming(
             )
         judgment_list.append(judgment_text)
     context_parts.append("## 판정 결과\n\n" + "\n\n".join(judgment_list))
+
+    # Story Director 규칙 가이드 (하단 배치)
+    if director_guidance:
+        context_parts.append(director_guidance)
 
     context_text = "\n\n".join(context_parts)
 

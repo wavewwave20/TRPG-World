@@ -5,10 +5,11 @@ import { useActionStore } from '../stores/actionStore';
 import { useStoryStore } from '../stores/storyStore';
 import { useAuthStore } from '../stores/authStore';
 import { useAIStore } from '../stores/aiStore';
-import { getStoryLogs, getCurrentAct } from '../services/api';
+import { getStoryLogs, getCurrentAct, getGrowthHistory } from '../services/api';
 // SessionCreationForm removed from in-session view
 import ModerationModal from './ModerationModal';
 import ActBanner from './ActBanner';
+import GrowthHistoryDropdown from './GrowthHistoryDropdown';
 import { useActStore } from '../stores/actStore';
 // import TypingText from './TypingText'; // Currently unused
 // import AIGenerationIndicator from './AIGenerationIndicator'; // REMOVED for streaming optimization
@@ -123,6 +124,11 @@ function mapAijudgmentToSummary(judgment: JudgmentSetup | JudgmentResult, index:
 export default function CenterPane() {
   const [actionText, setActionText] = useState('');
   const [showModerationModal, setShowModerationModal] = useState(false);
+  const [showSteeringModal, setShowSteeringModal] = useState(false);
+  const [hostInstructionText, setHostInstructionText] = useState('');
+  const [isHostInstructionEnabled, setIsHostInstructionEnabled] = useState(false);
+  const [pendingRemovedStory, setPendingRemovedStory] = useState<StoryEntryForRender | null>(null);
+  const [isRegeneratingStory, setIsRegeneratingStory] = useState(false);
   
   const currentSession = useGameStore((state) => state.currentSession);
   const currentCharacter = useGameStore((state) => state.currentCharacter);
@@ -135,6 +141,9 @@ export default function CenterPane() {
   
   const entries = useStoryStore((state) => state.entries);
   const setEntries = useStoryStore((state) => state.setEntries);
+  const addEntry = useStoryStore((state) => state.addEntry);
+  const updateEntry = useStoryStore((state) => state.updateEntry);
+  const removeEntry = useStoryStore((state) => state.removeEntry);
   
   const currentUserId = useAuthStore((state) => state.userId);
   
@@ -149,6 +158,7 @@ export default function CenterPane() {
   const narrativeEndRef = useRef<HTMLDivElement>(null);
   const socket = useSocketStore((state) => state.socket);
   const isInitialLoadRef = useRef<boolean>(true);
+  const lastInstructionNoticeRef = useRef<{ key: string; at: number } | null>(null);
   const prevJudgmentModalOpenRef = useRef<boolean>(isJudgmentModalOpen);
   const judgmentModalClosedAtRef = useRef<number | null>(null);
   const pendingNarrativeStartScrollRef = useRef<boolean>(false);
@@ -256,6 +266,20 @@ export default function CenterPane() {
       cancelled = true;
     };
   }, [currentSessionId, setCurrentAct]);
+
+  // Load growth history on session change
+  const setGrowthHistory = useActStore((state) => state.setGrowthHistory);
+  useEffect(() => {
+    if (!currentSessionId) {
+      setGrowthHistory([]);
+      return;
+    }
+    let cancelled = false;
+    getGrowthHistory(currentSessionId)
+      .then((history) => { if (!cancelled) setGrowthHistory(history); })
+      .catch((err) => { if (!cancelled) console.error('Failed to load growth history:', err); });
+    return () => { cancelled = true; };
+  }, [currentSessionId, setGrowthHistory]);
 
   // Reload story logs when narrative streaming completes
   useEffect(() => {
@@ -390,6 +414,103 @@ export default function CenterPane() {
     };
   }, []);
 
+  // Host story steering socket events
+  useEffect(() => {
+    if (!socket || !currentSessionId) return;
+
+    const handleInstructionData = (data: { session_id: number; instruction: string; enabled: boolean }) => {
+      if (data.session_id !== currentSessionId) return;
+      setHostInstructionText(data.instruction || '');
+      setIsHostInstructionEnabled(!!data.enabled);
+    };
+
+    const handleInstructionUpdated = (data: { session_id: number; instruction: string; enabled: boolean }) => {
+      if (data.session_id !== currentSessionId) return;
+      setHostInstructionText(data.instruction || '');
+      setIsHostInstructionEnabled(!!data.enabled);
+
+      const msg = data.enabled ? '스토리 조정 지시가 적용되었습니다.' : '스토리 조정 지시가 해제되었습니다.';
+      const dedupeKey = `${data.session_id}:${data.enabled}:${(data.instruction || '').trim()}`;
+      const now = Date.now();
+      const last = lastInstructionNoticeRef.current;
+      if (!last || last.key !== dedupeKey || now - last.at > 1500) {
+        useGameStore.getState().addNotification({
+          type: 'system',
+          message: msg,
+        });
+        lastInstructionNoticeRef.current = { key: dedupeKey, at: now };
+      }
+    };
+
+    const handleStoryRegenerationStarted = (data: { session_id: number }) => {
+      if (data.session_id !== currentSessionId) return;
+      if (!isRegeneratingStory) {
+        useGameStore.getState().addNotification({
+          type: 'system',
+          message: '최근 스토리 재생성을 시작합니다...',
+        });
+      }
+      setIsRegeneratingStory(true);
+    };
+
+    const handleStoryRegenerated = (data: {
+      session_id: number;
+      story_entry: { id: number; content: string; role: 'AI' | 'USER'; created_at: string };
+    }) => {
+      if (data.session_id !== currentSessionId) return;
+
+      const stateEntries = useStoryStore.getState().entries;
+      const exists = stateEntries.some((e) => e.id === data.story_entry.id);
+      if (exists) {
+        updateEntry(data.story_entry.id, { content: data.story_entry.content });
+      } else {
+        addEntry({
+          id: data.story_entry.id,
+          role: data.story_entry.role,
+          content: data.story_entry.content,
+          created_at: data.story_entry.created_at,
+        });
+      }
+      setPendingRemovedStory(null);
+      setIsRegeneratingStory(false);
+      useGameStore.getState().addNotification({
+        type: 'system',
+        message: '최근 스토리를 재생성했습니다.',
+      });
+    };
+
+    const handleStoryRegenerationError = (data: { session_id: number; error: string }) => {
+      if (data.session_id !== currentSessionId) return;
+      if (pendingRemovedStory) {
+        addEntry({
+          id: pendingRemovedStory.id,
+          role: pendingRemovedStory.role,
+          content: pendingRemovedStory.content,
+          created_at: new Date().toISOString(),
+          judgments: pendingRemovedStory.judgments,
+          event_triggered: pendingRemovedStory.event_triggered,
+        });
+        setPendingRemovedStory(null);
+      }
+      setIsRegeneratingStory(false);
+      useGameStore.getState().addError(`스토리 재생성 실패: ${data.error}`);
+    };
+
+    socket.on('story_instruction_data', handleInstructionData);
+    socket.on('story_instruction_updated', handleInstructionUpdated);
+    socket.on('story_regeneration_started', handleStoryRegenerationStarted);
+    socket.on('story_regenerated', handleStoryRegenerated);
+    socket.on('story_regeneration_error', handleStoryRegenerationError);
+
+    return () => {
+      socket.off('story_instruction_data', handleInstructionData);
+      socket.off('story_instruction_updated', handleInstructionUpdated);
+      socket.off('story_regeneration_started', handleStoryRegenerationStarted);
+      socket.off('story_regenerated', handleStoryRegenerated);
+      socket.off('story_regeneration_error', handleStoryRegenerationError);
+    };
+  }, [socket, currentSessionId, updateEntry, addEntry, pendingRemovedStory, isRegeneratingStory]);
+
   // Leaving handled via App header back button
 
   const handleStartGame = () => {
@@ -408,6 +529,39 @@ export default function CenterPane() {
       force: !allJudgmentsComplete,
     });
   }, [currentSession, allJudgmentsComplete, emit]);
+
+  const openSteeringModal = useCallback(() => {
+    if (!currentSession) return;
+    emit('get_story_instruction', { session_id: currentSession.id });
+    setShowSteeringModal(true);
+  }, [emit, currentSession]);
+
+  const handleSaveStoryInstruction = useCallback(() => {
+    if (!currentSession) return;
+    emit('set_story_instruction', {
+      session_id: currentSession.id,
+      instruction: hostInstructionText.trim(),
+    });
+  }, [emit, currentSession, hostInstructionText]);
+
+  const handleRegenerateLatestStory = useCallback(() => {
+    if (!currentSession || isRegeneratingStory) return;
+    const ok = window.confirm('최근 AI 스토리를 같은 행동/판정 결과로 재생성할까요?');
+    if (!ok) return;
+
+    const latestAI = [...entries].reverse().find((e) => e.role === 'AI');
+    if (!latestAI) {
+      useGameStore.getState().addError('재생성할 최근 AI 스토리가 없습니다.');
+      return;
+    }
+
+    setShowSteeringModal(false);
+    setPendingRemovedStory(latestAI);
+    setIsRegeneratingStory(true);
+    removeEntry(latestAI.id);
+
+    emit('regenerate_latest_story', { session_id: currentSession.id });
+  }, [emit, currentSession, entries, removeEntry, isRegeneratingStory]);
 
   const handleSubmitAction = () => {
     // Validate action text is non-empty
@@ -469,19 +623,39 @@ export default function CenterPane() {
         
         {/* Session Info or Create Button */}
         {currentSession ? (
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 flex-wrap justify-end">
+            <div className="hidden sm:block">
+              <GrowthHistoryDropdown />
+            </div>
             {/* Moderation Button - Only show when user is host */}
             {isHost && (
               <>
                 <button
                   onClick={() => setShowModerationModal(true)}
-                  className="relative bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-3 py-2.5 lg:py-1.5 rounded-lg text-xs font-semibold shadow-sm transition-all hover:border-slate-300"
+                  className="relative shrink-0 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-3 py-2.5 lg:py-1.5 rounded-lg text-xs font-semibold shadow-sm transition-all hover:border-slate-300"
                 >
                   행동 결정
                   {/* Queue count badge - Show when queueCount > 0 */}
                   {queueCount > 0 && (
                     <span className="absolute -top-2 -right-2 bg-red-500 text-white text-[10px] font-bold rounded-full h-5 w-5 flex items-center justify-center shadow-sm border border-white">
                       {queueCount}
+                    </span>
+                  )}
+                </button>
+
+                <button
+                  onClick={openSteeringModal}
+                  className={`relative shrink-0 px-2.5 py-2.5 lg:px-3 lg:py-1.5 rounded-lg text-xs font-semibold shadow-sm transition-all border whitespace-nowrap ${
+                    isHostInstructionEnabled
+                      ? 'bg-violet-50 text-violet-800 border-violet-300 hover:bg-violet-100'
+                      : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
+                  }`}
+                >
+                  <span className="lg:hidden">조정</span>
+                  <span className="hidden lg:inline">스토리 조정</span>
+                  {isHostInstructionEnabled && (
+                    <span className="absolute -top-2 -right-2 bg-violet-600 text-white text-[10px] font-bold rounded-full h-5 px-1.5 flex items-center justify-center shadow-sm border border-white">
+                      ON
                     </span>
                   )}
                 </button>
@@ -623,6 +797,64 @@ export default function CenterPane() {
         </div>
       </div>
       
+      {/* Story Steering Modal */}
+      {showSteeringModal && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <div className="w-full max-w-xl bg-white rounded-xl border border-slate-200 shadow-xl p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-lg font-bold text-slate-800">스토리 조정 (호스트)</h3>
+              <button
+                onClick={() => setShowSteeringModal(false)}
+                className="text-slate-400 hover:text-slate-600 text-xl leading-none"
+                aria-label="close"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-500 mb-2">
+              텍스트가 비어있지 않으면 이후 스토리 생성마다 계속 반영됩니다.
+            </p>
+            <textarea
+              value={hostInstructionText}
+              onChange={(e) => setHostInstructionText(e.target.value)}
+              rows={5}
+              placeholder="예: 위기 연속을 줄이고 단서 수집 중심으로 진행. 메인 목표(북부 요새 봉인)에서 벗어나지 말 것"
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-100 focus:border-violet-400"
+            />
+
+            <div className="mt-4 flex items-center justify-between gap-2">
+              <button
+                onClick={handleRegenerateLatestStory}
+                disabled={isRegeneratingStory}
+                className="px-3 py-2 rounded-lg border border-amber-300 bg-amber-50 text-amber-800 text-sm font-semibold hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isRegeneratingStory ? '재생성 중...' : '최근 스토리 재생성'}
+              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    setHostInstructionText('');
+                    if (currentSession) {
+                      emit('set_story_instruction', { session_id: currentSession.id, instruction: '' });
+                    }
+                  }}
+                  className="px-3 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm font-medium hover:bg-slate-50"
+                >
+                  지시 해제
+                </button>
+                <button
+                  onClick={handleSaveStoryInstruction}
+                  className="px-3 py-2 rounded-lg border border-violet-600 bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700"
+                >
+                  저장
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Moderation Modal */}
       <ModerationModal 
         isOpen={showModerationModal} 

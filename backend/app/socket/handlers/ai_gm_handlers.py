@@ -11,6 +11,7 @@ from datetime import datetime
 from app.database import SessionLocal
 from app.models import ActionJudgment, Character, GameSession, StoryLog
 from app.services.llm_config_resolver import get_active_llm_model
+from app.services.story_director import get_story_director_service
 from app.socket.managers.presence_manager import session_presence
 from app.socket.server import logger
 
@@ -1032,6 +1033,140 @@ def register_handlers(sio):
         except Exception as e:
             logger.error(f"start_game 외부 에러: {e}", exc_info=True)
             await sio.emit("error", {"message": "게임 시작 실패"}, to=sid)
+
+    @sio.event
+    async def get_story_instruction(sid, data):
+        """호스트 스토리 지시사항을 조회합니다."""
+        session_id = data.get("session_id")
+        if not session_id:
+            await sio.emit("error", {"message": "session_id가 필요합니다"}, to=sid)
+            return
+
+        db = SessionLocal()
+        try:
+            session = db.query(GameSession).filter(GameSession.id == session_id).first()
+            if not session:
+                await sio.emit("error", {"message": "세션을 찾을 수 없습니다"}, to=sid)
+                return
+
+            director = get_story_director_service()
+            instruction = director.get_host_instruction(
+                session_id=session_id,
+                world_context=session.world_prompt or "",
+                ai_summary=session.ai_summary,
+            )
+            await sio.emit(
+                "story_instruction_data",
+                {
+                    "session_id": session_id,
+                    "instruction": instruction,
+                    "enabled": bool(instruction.strip()),
+                },
+                to=sid,
+            )
+        finally:
+            db.close()
+
+    @sio.event
+    async def set_story_instruction(sid, data):
+        """호스트 스토리 지시사항을 설정/해제합니다."""
+        session_id = data.get("session_id")
+        instruction = (data.get("instruction") or "").strip()
+
+        if not session_id:
+            await sio.emit("error", {"message": "session_id가 필요합니다"}, to=sid)
+            return
+
+        presence = session_presence.get(sid)
+        if not presence or presence.get("session_id") != session_id:
+            await sio.emit("error", {"message": "세션 참가 상태가 아닙니다"}, to=sid)
+            return
+
+        db = SessionLocal()
+        try:
+            session = db.query(GameSession).filter(GameSession.id == session_id).first()
+            if not session:
+                await sio.emit("error", {"message": "세션을 찾을 수 없습니다"}, to=sid)
+                return
+
+            if presence.get("user_id") != session.host_user_id:
+                await sio.emit("error", {"message": "호스트만 설정할 수 있습니다"}, to=sid)
+                return
+
+            director = get_story_director_service()
+            state = director.set_host_instruction(
+                session_id=session_id,
+                world_context=session.world_prompt or "",
+                ai_summary=session.ai_summary,
+                instruction=instruction,
+            )
+
+            await sio.emit(
+                "story_instruction_updated",
+                {
+                    "session_id": session_id,
+                    "instruction": state.host_instruction,
+                    "enabled": bool(state.host_instruction),
+                },
+                room=f"session_{session_id}",
+            )
+        finally:
+            db.close()
+
+    @sio.event
+    async def regenerate_latest_story(sid, data):
+        """최근 AI 스토리 1건을 같은 행동/판정으로 재생성합니다."""
+        session_id = data.get("session_id")
+        if not session_id:
+            await sio.emit("error", {"message": "session_id가 필요합니다"}, to=sid)
+            return
+
+        presence = session_presence.get(sid)
+        if not presence or presence.get("session_id") != session_id:
+            await sio.emit("error", {"message": "세션 참가 상태가 아닙니다"}, to=sid)
+            return
+
+        db = SessionLocal()
+        try:
+            session = db.query(GameSession).filter(GameSession.id == session_id).first()
+            if not session:
+                await sio.emit("error", {"message": "세션을 찾을 수 없습니다"}, to=sid)
+                return
+
+            if presence.get("user_id") != session.host_user_id:
+                await sio.emit("error", {"message": "호스트만 재생성할 수 있습니다"}, to=sid)
+                return
+
+            await sio.emit("story_regeneration_started", {"session_id": session_id}, room=f"session_{session_id}")
+
+            from app.services.ai_gm_service_v2 import AIGMServiceV2
+
+            llm_model = get_active_llm_model()
+            ai_service = AIGMServiceV2(db=db, llm_model=llm_model)
+            updated_log = await ai_service.regenerate_latest_story(session_id=session_id)
+
+            await sio.emit(
+                "story_regenerated",
+                {
+                    "session_id": session_id,
+                    "story_entry": {
+                        "id": updated_log.id,
+                        "role": updated_log.role,
+                        "content": updated_log.content,
+                        "created_at": updated_log.created_at.isoformat(),
+                    },
+                },
+                room=f"session_{session_id}",
+            )
+        except Exception as e:
+            logger.error(f"최근 스토리 재생성 실패: {e}", exc_info=True)
+            await sio.emit(
+                "story_regeneration_error",
+                {"session_id": session_id, "error": str(e)},
+                to=sid,
+            )
+        finally:
+            db.close()
 
     @sio.event
     async def request_narrative_stream(sid, data):
