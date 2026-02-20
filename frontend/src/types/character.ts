@@ -30,6 +30,7 @@ export interface Skill {
   name: string;
   description?: string;
   ability?: AbilityKey;
+  cooldown_actions?: number;
 }
 
 export type StatusEffectCategory = 'physical' | 'mental';
@@ -64,6 +65,7 @@ export interface CharacterData {
   skills: Skill[];
   weaknesses: (string | Weakness)[];
   status_effects: (string | StatusEffect)[];
+  skill_cooldowns?: Record<string, number>;
 }
 
 export interface Character {

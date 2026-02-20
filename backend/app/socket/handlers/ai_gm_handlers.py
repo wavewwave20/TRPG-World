@@ -1050,6 +1050,7 @@ def register_handlers(sio):
                 return
 
             instruction = (session.host_instruction or "").strip()
+            controls = session.host_story_controls or {}
             director = get_story_director_service()
             director.set_host_instruction(
                 session_id=session_id,
@@ -1057,12 +1058,19 @@ def register_handlers(sio):
                 ai_summary=session.ai_summary,
                 instruction=instruction,
             )
+            director.set_host_controls(
+                session_id=session_id,
+                world_context=session.world_prompt or "",
+                ai_summary=session.ai_summary,
+                controls=controls,
+            )
             await sio.emit(
                 "story_instruction_data",
                 {
                     "session_id": session_id,
                     "instruction": instruction,
                     "enabled": bool(instruction.strip()),
+                    "controls": controls,
                 },
                 to=sid,
             )
@@ -1074,6 +1082,7 @@ def register_handlers(sio):
         """호스트 스토리 지시사항을 설정/해제합니다."""
         session_id = data.get("session_id")
         instruction = (data.get("instruction") or "").strip()
+        controls = data.get("controls") or {}
 
         if not session_id:
             await sio.emit("error", {"message": "session_id가 필요합니다"}, to=sid)
@@ -1095,7 +1104,17 @@ def register_handlers(sio):
                 await sio.emit("error", {"message": "호스트만 설정할 수 있습니다"}, to=sid)
                 return
 
+            normalized_controls = {
+                "end_crisis": bool(controls.get("end_crisis", False)),
+                "focus_main_goal": bool(controls.get("focus_main_goal", False)),
+                "limit_consecutive_crisis": bool(controls.get("limit_consecutive_crisis", False)),
+                "pace": str(controls.get("pace", "neutral")).lower(),
+            }
+            if normalized_controls["pace"] not in {"up", "down", "neutral"}:
+                normalized_controls["pace"] = "neutral"
+
             session.host_instruction = instruction
+            session.host_story_controls = normalized_controls
             db.commit()
 
             director = get_story_director_service()
@@ -1105,6 +1124,12 @@ def register_handlers(sio):
                 ai_summary=session.ai_summary,
                 instruction=instruction,
             )
+            director.set_host_controls(
+                session_id=session_id,
+                world_context=session.world_prompt or "",
+                ai_summary=session.ai_summary,
+                controls=normalized_controls,
+            )
 
             await sio.emit(
                 "story_instruction_updated",
@@ -1112,6 +1137,7 @@ def register_handlers(sio):
                     "session_id": session_id,
                     "instruction": state.host_instruction,
                     "enabled": bool(state.host_instruction),
+                    "controls": normalized_controls,
                 },
                 room=f"session_{session_id}",
             )

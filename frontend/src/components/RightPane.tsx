@@ -51,13 +51,6 @@ export default function RightPane() {
 
   return (
     <div className="h-full flex flex-col bg-white">
-      {/* Header */}
-      <div className="p-4 border-b border-slate-200 bg-white">
-        <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-          <span className="text-blue-500">💬</span> 채팅
-        </h2>
-      </div>
-
       {/* System Log Section (1/3) */}
       <div className="flex-none h-[25%] lg:h-[33%] flex flex-col border-b border-slate-200">
         <div className="px-4 py-2 bg-slate-100 border-b border-slate-200">

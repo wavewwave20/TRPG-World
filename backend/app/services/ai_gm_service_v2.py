@@ -312,12 +312,19 @@ class AIGMServiceV2:
         """DB의 호스트 지시사항을 StoryDirector 메모리 상태에 동기화합니다."""
         session = self.db.query(GameSession).filter(GameSession.id == session_id).first()
         instruction = (session.host_instruction or "").strip() if session else ""
+        controls = (session.host_story_controls or {}) if session else {}
         director_service = get_story_director_service()
         director_service.set_host_instruction(
             session_id=session_id,
             world_context=world_context,
             ai_summary=ai_summary,
             instruction=instruction,
+        )
+        director_service.set_host_controls(
+            session_id=session_id,
+            world_context=world_context,
+            ai_summary=ai_summary,
+            controls=controls,
         )
 
     def _log_story_flow_metric(
@@ -338,6 +345,12 @@ class AIGMServiceV2:
             critical_success_count = sum(1 for j in judgments if j.outcome == JudgmentOutcome.CRITICAL_SUCCESS)
             auto_success_count = sum(1 for j in judgments if j.outcome == JudgmentOutcome.AUTO_SUCCESS)
 
+            controls_enabled = bool(
+                director.end_crisis
+                or director.focus_main_goal
+                or director.limit_consecutive_crisis
+                or director.pace != "neutral"
+            )
             metric = StoryFlowMetric(
                 session_id=session_id,
                 story_log_id=story_log_id,
@@ -351,7 +364,7 @@ class AIGMServiceV2:
                 success_count=success_count,
                 critical_success_count=critical_success_count,
                 auto_success_count=auto_success_count,
-                host_instruction_enabled=bool((director.host_instruction or "").strip()),
+                host_instruction_enabled=bool((director.host_instruction or "").strip()) or controls_enabled,
                 host_instruction_length=len((director.host_instruction or "").strip()),
                 created_at=datetime.utcnow(),
             )

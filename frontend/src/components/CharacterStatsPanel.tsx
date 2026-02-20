@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { Character, AbilityKey, StatusEffect } from '../types/character';
 import { ABILITY_SHORT_LABELS } from '../types/character';
+import { useStoryStore } from '../stores/storyStore';
 
 interface CharacterStatsPanelProps {
   character: Character;
@@ -10,6 +11,8 @@ export default function CharacterStatsPanel({ character }: CharacterStatsPanelPr
   const [skillsExpanded, setSkillsExpanded] = useState(true);
 
   const { data } = character;
+  const entries = useStoryStore((state) => state.entries);
+  const currentNarrativeTurn = useMemo(() => entries.filter((e) => e.role === 'AI').length, [entries]);
 
   // Ability scores in display order
   const abilityScores = [
@@ -86,43 +89,66 @@ export default function CharacterStatsPanel({ character }: CharacterStatsPanelPr
             </button>
             {skillsExpanded && (
               <div id="skills-list" className="space-y-2" role="list">
-                {data.skills.map((skill, index) => (
-                  <div
-                    key={index}
-                    className="bg-slate-50 rounded-lg p-2 border border-slate-200"
-                    role="listitem"
-                    aria-label={`${skill.name}${skill.type ? `, ${skill.type === 'passive' ? '패시브' : '액티브'}` : ''}${skill.description ? `: ${skill.description}` : ''}`}
-                  >
-                    <div className="flex items-center gap-2 mb-1">
-                      {skill.type && (
-                        <span
-                          className={`text-xs px-1.5 py-0.5 rounded font-medium ${
-                            skill.type === 'passive'
-                              ? 'bg-purple-100 text-purple-700'
-                              : 'bg-orange-100 text-orange-700'
-                          }`}
-                          aria-label={skill.type === 'passive' ? '패시브' : '액티브'}
-                        >
-                          {skill.type === 'passive' ? 'P' : 'A'}
+                {data.skills.map((skill, index) => {
+                  const readyTurn = Number(data.skill_cooldowns?.[skill.name] ?? 0);
+                  const cooldownLeft = Math.max(0, readyTurn - currentNarrativeTurn);
+                  const isActive = (skill.type || '').toLowerCase() === 'active';
+                  const cooldownConfigured = isActive ? Number(skill.cooldown_actions ?? 3) : 0;
+
+                  return (
+                    <div
+                      key={index}
+                      className="bg-slate-50 rounded-lg p-2 border border-slate-200"
+                      role="listitem"
+                      aria-label={`${skill.name}${skill.type ? `, ${skill.type === 'passive' ? '패시브' : '액티브'}` : ''}${skill.description ? `: ${skill.description}` : ''}`}
+                    >
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        {skill.type && (
+                          <span
+                            className={`text-xs px-1.5 py-0.5 rounded font-medium ${
+                              skill.type === 'passive'
+                                ? 'bg-purple-100 text-purple-700'
+                                : 'bg-orange-100 text-orange-700'
+                            }`}
+                            aria-label={skill.type === 'passive' ? '패시브' : '액티브'}
+                          >
+                            {skill.type === 'passive' ? 'P' : 'A'}
+                          </span>
+                        )}
+                        {skill.ability && (
+                          <span
+                            className="text-xs px-1.5 py-0.5 rounded font-medium bg-blue-100 text-blue-700"
+                            aria-label={`주요 능력치: ${ABILITY_SHORT_LABELS[skill.ability as AbilityKey] || skill.ability}`}
+                          >
+                            {ABILITY_SHORT_LABELS[skill.ability as AbilityKey] || skill.ability}
+                          </span>
+                        )}
+                        {isActive && cooldownConfigured > 0 && (
+                          <span className="text-xs px-1.5 py-0.5 rounded font-medium bg-slate-200 text-slate-700">
+                            CD {cooldownConfigured}
+                          </span>
+                        )}
+                        {isActive && cooldownConfigured > 0 && (
+                          cooldownLeft > 0 ? (
+                            <span className="text-xs px-1.5 py-0.5 rounded font-medium bg-amber-100 text-amber-800">
+                              남은 {cooldownLeft}턴
+                            </span>
+                          ) : (
+                            <span className="text-xs px-1.5 py-0.5 rounded font-medium bg-green-100 text-green-700">
+                              사용 가능
+                            </span>
+                          )
+                        )}
+                        <span className="text-sm font-semibold text-slate-800">
+                          {skill.name}
                         </span>
+                      </div>
+                      {skill.description && (
+                        <p className="text-xs text-slate-600">{skill.description}</p>
                       )}
-                      {skill.ability && (
-                        <span
-                          className="text-xs px-1.5 py-0.5 rounded font-medium bg-blue-100 text-blue-700"
-                          aria-label={`주요 능력치: ${ABILITY_SHORT_LABELS[skill.ability as AbilityKey] || skill.ability}`}
-                        >
-                          {ABILITY_SHORT_LABELS[skill.ability as AbilityKey] || skill.ability}
-                        </span>
-                      )}
-                      <span className="text-sm font-semibold text-slate-800">
-                        {skill.name}
-                      </span>
                     </div>
-                    {skill.description && (
-                      <p className="text-xs text-slate-600">{skill.description}</p>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

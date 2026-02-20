@@ -13,7 +13,15 @@ action_queues: dict[int, list[dict]] = {}
 action_counter: int = 0
 
 
-def add_action(session_id: int, player_id: int, character_name: str, action_text: str) -> dict:
+def add_action(
+    session_id: int,
+    player_id: int,
+    character_name: str,
+    action_text: str,
+    action_mode: str = "normal",
+    skill_name: str | None = None,
+    skill_ability: str | None = None,
+) -> dict:
     """액션을 큐에 추가합니다.
 
     새로운 액션을 생성하고 세션의 큐에 추가합니다.
@@ -48,6 +56,9 @@ def add_action(session_id: int, player_id: int, character_name: str, action_text
         "player_id": player_id,
         "character_name": character_name,
         "action_text": action_text,
+        "action_mode": action_mode,
+        "skill_name": skill_name,
+        "skill_ability": skill_ability,
         "order": len(action_queues[session_id]),
     }
 

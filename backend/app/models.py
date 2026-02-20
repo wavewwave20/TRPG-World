@@ -51,6 +51,7 @@ class GameSession(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     event_probability = Column(Float, default=0.00, nullable=False, server_default="0.00")
     host_instruction = Column(Text, nullable=False, default="", server_default="")
+    host_story_controls = Column(JSON, nullable=False, default=dict, server_default="{}")
 
 
 class Character(Base):

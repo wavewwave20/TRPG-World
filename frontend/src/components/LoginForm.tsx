@@ -126,14 +126,6 @@ export default function LoginForm() {
             {isRegisterMode ? '이미 계정이 있으신가요? 로그인' : '계정이 없으신가요? 회원가입'}
           </button>
         </div>
-
-        {!isRegisterMode && (
-          <div className="mt-6 text-center text-sm text-slate-500 bg-slate-50 rounded-lg p-4 border border-slate-200">
-            <p className="font-semibold text-slate-700 mb-2">테스트 계정:</p>
-            <p className="mt-1">user1 / 1234</p>
-            <p>user2 / 1234</p>
-          </div>
-        )}
       </div>
     </div>
   );

@@ -123,10 +123,18 @@ function mapAijudgmentToSummary(judgment: JudgmentSetup | JudgmentResult, index:
 
 export default function CenterPane() {
   const [actionText, setActionText] = useState('');
+  const [actionMode, setActionMode] = useState<'normal' | 'skill'>('normal');
+  const [selectedSkillName, setSelectedSkillName] = useState('');
   const [showModerationModal, setShowModerationModal] = useState(false);
   const [showSteeringModal, setShowSteeringModal] = useState(false);
   const [hostInstructionText, setHostInstructionText] = useState('');
   const [isHostInstructionEnabled, setIsHostInstructionEnabled] = useState(false);
+  const [storyControls, setStoryControls] = useState({
+    end_crisis: false,
+    focus_main_goal: false,
+    limit_consecutive_crisis: false,
+    pace: 'neutral' as 'up' | 'down' | 'neutral',
+  });
   const [pendingRemovedStory, setPendingRemovedStory] = useState<StoryEntryForRender | null>(null);
   const [isRegeneratingStory, setIsRegeneratingStory] = useState(false);
   
@@ -158,7 +166,6 @@ export default function CenterPane() {
   const narrativeEndRef = useRef<HTMLDivElement>(null);
   const socket = useSocketStore((state) => state.socket);
   const isInitialLoadRef = useRef<boolean>(true);
-  const lastInstructionNoticeRef = useRef<{ key: string; at: number } | null>(null);
   const prevJudgmentModalOpenRef = useRef<boolean>(isJudgmentModalOpen);
   const judgmentModalClosedAtRef = useRef<number | null>(null);
   const pendingNarrativeStartScrollRef = useRef<boolean>(false);
@@ -171,6 +178,24 @@ export default function CenterPane() {
     currentUserId !== undefined &&
     Number(currentSession.hostUserId) === Number(currentUserId);
   const currentCharacterId = currentCharacter?.id;
+  const currentNarrativeTurn = useMemo(
+    () => entries.filter((e) => e.role === 'AI').length,
+    [entries]
+  );
+  const activeSkills = useMemo(() => {
+    const skills = currentCharacter?.data?.skills ?? [];
+    return skills.filter((s: any) => (s?.type || '').toLowerCase() === 'active');
+  }, [currentCharacter]);
+  const selectedSkill = useMemo(
+    () => activeSkills.find((s: any) => s.name === selectedSkillName) || null,
+    [activeSkills, selectedSkillName]
+  );
+  const selectedSkillCooldownLeft = useMemo(() => {
+    if (!selectedSkill || !currentCharacter) return 0;
+    const cooldownMap = currentCharacter.data?.skill_cooldowns || {};
+    const readyTurn = Number(cooldownMap[selectedSkill.name] ?? 0);
+    return Math.max(0, readyTurn - currentNarrativeTurn);
+  }, [selectedSkill, currentCharacter, currentNarrativeTurn]);
   const allJudgmentsComplete = useMemo(
     () => judgments.length > 0 && judgments.every((j) => j.status === 'complete'),
     [judgments]
@@ -418,28 +443,44 @@ export default function CenterPane() {
   useEffect(() => {
     if (!socket || !currentSessionId) return;
 
-    const handleInstructionData = (data: { session_id: number; instruction: string; enabled: boolean }) => {
+    const handleInstructionData = (data: { session_id: number; instruction: string; enabled: boolean; controls?: any }) => {
       if (data.session_id !== currentSessionId) return;
       setHostInstructionText(data.instruction || '');
-      setIsHostInstructionEnabled(!!data.enabled);
+      const controls = data.controls || {};
+      const nextControls = {
+        end_crisis: !!controls.end_crisis,
+        focus_main_goal: !!controls.focus_main_goal,
+        limit_consecutive_crisis: !!controls.limit_consecutive_crisis,
+        pace: controls.pace === 'up' || controls.pace === 'down' ? controls.pace : 'neutral',
+      };
+      setStoryControls(nextControls);
+      setIsHostInstructionEnabled(
+        !!(data.instruction || '').trim() ||
+        nextControls.end_crisis ||
+        nextControls.focus_main_goal ||
+        nextControls.limit_consecutive_crisis ||
+        nextControls.pace !== 'neutral'
+      );
     };
 
-    const handleInstructionUpdated = (data: { session_id: number; instruction: string; enabled: boolean }) => {
+    const handleInstructionUpdated = (data: { session_id: number; instruction: string; enabled: boolean; controls?: any }) => {
       if (data.session_id !== currentSessionId) return;
       setHostInstructionText(data.instruction || '');
-      setIsHostInstructionEnabled(!!data.enabled);
-
-      const msg = data.enabled ? '스토리 조정 지시가 적용되었습니다.' : '스토리 조정 지시가 해제되었습니다.';
-      const dedupeKey = `${data.session_id}:${data.enabled}:${(data.instruction || '').trim()}`;
-      const now = Date.now();
-      const last = lastInstructionNoticeRef.current;
-      if (!last || last.key !== dedupeKey || now - last.at > 1500) {
-        useGameStore.getState().addNotification({
-          type: 'system',
-          message: msg,
-        });
-        lastInstructionNoticeRef.current = { key: dedupeKey, at: now };
-      }
+      const controls = data.controls || {};
+      const nextControls = {
+        end_crisis: !!controls.end_crisis,
+        focus_main_goal: !!controls.focus_main_goal,
+        limit_consecutive_crisis: !!controls.limit_consecutive_crisis,
+        pace: controls.pace === 'up' || controls.pace === 'down' ? controls.pace : 'neutral',
+      };
+      setStoryControls(nextControls);
+      setIsHostInstructionEnabled(
+        !!(data.instruction || '').trim() ||
+        nextControls.end_crisis ||
+        nextControls.focus_main_goal ||
+        nextControls.limit_consecutive_crisis ||
+        nextControls.pace !== 'neutral'
+      );
     };
 
     const handleStoryRegenerationStarted = (data: { session_id: number }) => {
@@ -511,6 +552,33 @@ export default function CenterPane() {
     };
   }, [socket, currentSessionId, updateEntry, addEntry, pendingRemovedStory, isRegeneratingStory]);
 
+  useEffect(() => {
+    if (!socket || !currentCharacter) return;
+
+    const handleSkillCooldownUpdated = (data: {
+      character_id: number;
+      skill_name: string;
+      ready_turn: number;
+    }) => {
+      if (data.character_id !== currentCharacter.id) return;
+      const current = useGameStore.getState().currentCharacter;
+      if (!current || current.id !== data.character_id) return;
+      const nextData = {
+        ...current.data,
+        skill_cooldowns: {
+          ...(current.data?.skill_cooldowns || {}),
+          [data.skill_name]: data.ready_turn,
+        },
+      };
+      useGameStore.getState().setCharacter({ ...current, data: nextData });
+    };
+
+    socket.on('skill_cooldown_updated', handleSkillCooldownUpdated);
+    return () => {
+      socket.off('skill_cooldown_updated', handleSkillCooldownUpdated);
+    };
+  }, [socket, currentCharacter]);
+
   // Leaving handled via App header back button
 
   const handleStartGame = () => {
@@ -541,8 +609,9 @@ export default function CenterPane() {
     emit('set_story_instruction', {
       session_id: currentSession.id,
       instruction: hostInstructionText.trim(),
+      controls: storyControls,
     });
-  }, [emit, currentSession, hostInstructionText]);
+  }, [emit, currentSession, hostInstructionText, storyControls]);
 
   const handleRegenerateLatestStory = useCallback(() => {
     if (!currentSession || isRegeneratingStory) return;
@@ -563,46 +632,82 @@ export default function CenterPane() {
     emit('regenerate_latest_story', { session_id: currentSession.id });
   }, [emit, currentSession, entries, removeEntry, isRegeneratingStory]);
 
+  useEffect(() => {
+    const openModeration = () => setShowModerationModal(true);
+    const openSteering = () => openSteeringModal();
+    const advanceStory = () => handleHostAdvanceStory();
+
+    window.addEventListener('oc:open_moderation_modal', openModeration);
+    window.addEventListener('oc:open_story_steering_modal', openSteering);
+    window.addEventListener('oc:host_advance_story', advanceStory);
+
+    return () => {
+      window.removeEventListener('oc:open_moderation_modal', openModeration);
+      window.removeEventListener('oc:open_story_steering_modal', openSteering);
+      window.removeEventListener('oc:host_advance_story', advanceStory);
+    };
+  }, [openSteeringModal, handleHostAdvanceStory]);
+
   const handleSubmitAction = () => {
     // Validate action text is non-empty
     if (!actionText.trim()) {
       return;
     }
-    
+
     // Ensure we have session and character
     if (!currentSession || !currentCharacter || !currentUserId) {
       return;
     }
-    
+
+    if (actionMode === 'skill') {
+      if (!selectedSkillName) {
+        useGameStore.getState().addError('스킬을 선택하세요.');
+        return;
+      }
+      if (selectedSkillCooldownLeft > 0) {
+        useGameStore.getState().addError(`스킬 쿨타임 중입니다. 남은 스토리 진행 ${selectedSkillCooldownLeft}회`);
+        return;
+      }
+    }
+
     // Submit action to queue - host will commit all actions together
-    // This does NOT trigger LLM immediately, just adds to the action queue
     emit('submit_action', {
       session_id: currentSession.id,
       player_id: currentUserId,
       character_name: currentCharacter.name,
-      action_text: actionText.trim()
+      action_text: actionText.trim(),
+      action_mode: actionMode,
+      skill_name: actionMode === 'skill' ? selectedSkillName : null,
     });
-    
+
     // Clear input text after submission
     setActionText('');
-    
-    // Keep input enabled so player can submit more actions if needed
-    // Input will be disabled when host commits actions
   };
 
   const autoResizeActionInput = useCallback(() => {
     const textarea = actionInputRef.current;
     if (!textarea) return;
 
+    const minHeight = 48;
     const maxHeight = 192; // about 8 lines with current typography
     textarea.style.height = 'auto';
-    textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`;
+    textarea.style.height = `${Math.max(minHeight, Math.min(textarea.scrollHeight, maxHeight))}px`;
     textarea.style.overflowY = textarea.scrollHeight > maxHeight ? 'auto' : 'hidden';
   }, []);
 
   useEffect(() => {
     autoResizeActionInput();
   }, [actionText, autoResizeActionInput]);
+
+  useEffect(() => {
+    if (actionMode !== 'skill') return;
+    if (!selectedSkillName && activeSkills.length > 0) {
+      setSelectedSkillName(activeSkills[0].name);
+    }
+    if (selectedSkillName && !activeSkills.some((s: any) => s.name === selectedSkillName)) {
+      setSelectedSkillName(activeSkills[0]?.name || '');
+    }
+  }, [actionMode, activeSkills, selectedSkillName]);
 
   const handleActionInputKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key !== 'Enter') return;
@@ -616,63 +721,60 @@ export default function CenterPane() {
 
   return (
     <div className="h-full flex flex-col relative z-10 bg-white">
-      <div className="flex justify-between items-center px-3 py-3 sm:px-6 sm:py-4 border-b border-slate-200 bg-white sticky top-0 z-20">
-        <h2 className="text-lg font-bold text-slate-800">
-          스토리북
-        </h2>
-        
+      <div className="hidden sm:flex justify-end items-center px-3 py-2 sm:px-6 sm:py-4 border-b border-slate-200 bg-white sticky top-0 z-20">
         {/* Session Info or Create Button */}
         {currentSession ? (
-          <div className="flex items-center gap-2 flex-wrap justify-end">
+          <div className="flex items-center gap-2 justify-end relative">
             <div className="hidden sm:block">
               <GrowthHistoryDropdown />
             </div>
             {/* Moderation Button - Only show when user is host */}
             {isHost && (
               <>
-                <button
-                  onClick={() => setShowModerationModal(true)}
-                  className="relative shrink-0 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-3 py-2.5 lg:py-1.5 rounded-lg text-xs font-semibold shadow-sm transition-all hover:border-slate-300"
-                >
-                  행동 결정
-                  {/* Queue count badge - Show when queueCount > 0 */}
-                  {queueCount > 0 && (
-                    <span className="absolute -top-2 -right-2 bg-red-500 text-white text-[10px] font-bold rounded-full h-5 w-5 flex items-center justify-center shadow-sm border border-white">
-                      {queueCount}
-                    </span>
-                  )}
-                </button>
-
-                <button
-                  onClick={openSteeringModal}
-                  className={`relative shrink-0 px-2.5 py-2.5 lg:px-3 lg:py-1.5 rounded-lg text-xs font-semibold shadow-sm transition-all border whitespace-nowrap ${
-                    isHostInstructionEnabled
-                      ? 'bg-violet-50 text-violet-800 border-violet-300 hover:bg-violet-100'
-                      : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
-                  }`}
-                >
-                  <span className="lg:hidden">조정</span>
-                  <span className="hidden lg:inline">스토리 조정</span>
-                  {isHostInstructionEnabled && (
-                    <span className="absolute -top-2 -right-2 bg-violet-600 text-white text-[10px] font-bold rounded-full h-5 px-1.5 flex items-center justify-center shadow-sm border border-white">
-                      ON
-                    </span>
-                  )}
-                </button>
-
-                {hostCanAdvanceStory && (
+                {/* tablet/desktop: inline buttons */}
+                <div className="hidden sm:flex items-center gap-2">
                   <button
-                    onClick={handleHostAdvanceStory}
-                    disabled={isGenerating}
-                    className="bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 px-3 py-2.5 lg:py-1.5 rounded-lg text-xs font-semibold shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    onClick={() => setShowModerationModal(true)}
+                    className="relative shrink-0 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-3 py-2.5 lg:py-1.5 rounded-lg text-xs font-semibold shadow-sm transition-all hover:border-slate-300"
                   >
-                    {isGenerating
-                      ? '이야기 생성 중...'
-                      : allJudgmentsComplete
-                      ? '스토리 진행'
-                      : '판정 건너뛰고 스토리 진행'}
+                    행동 결정
+                    {queueCount > 0 && (
+                      <span className="absolute -top-2 -right-2 bg-red-500 text-white text-[10px] font-bold rounded-full h-5 w-5 flex items-center justify-center shadow-sm border border-white">
+                        {queueCount}
+                      </span>
+                    )}
                   </button>
-                )}
+
+                  <button
+                    onClick={openSteeringModal}
+                    className={`relative shrink-0 px-2.5 py-2.5 lg:px-3 lg:py-1.5 rounded-lg text-xs font-semibold shadow-sm transition-all border whitespace-nowrap ${
+                      isHostInstructionEnabled
+                        ? 'bg-violet-50 text-violet-800 border-violet-300 hover:bg-violet-100'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
+                    }`}
+                  >
+                    스토리 조정
+                    {isHostInstructionEnabled && (
+                      <span className="absolute -top-2 -right-2 bg-violet-600 text-white text-[10px] font-bold rounded-full h-5 px-1.5 flex items-center justify-center shadow-sm border border-white">
+                        ON
+                      </span>
+                    )}
+                  </button>
+
+                  {hostCanAdvanceStory && (
+                    <button
+                      onClick={handleHostAdvanceStory}
+                      disabled={isGenerating}
+                      className="bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 px-3 py-2.5 lg:py-1.5 rounded-lg text-xs font-semibold shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isGenerating
+                        ? '이야기 생성 중...'
+                        : allJudgmentsComplete
+                        ? '스토리 진행'
+                        : '판정 건너뛰고 스토리 진행'}
+                    </button>
+                  )}
+                </div>
               </>
             )}
           </div>
@@ -751,9 +853,61 @@ export default function CenterPane() {
       </div>
       
       {/* Action Input Section */}
-      <div className="p-4 border-t border-slate-200 bg-white">
-        <h3 className="text-xs font-bold text-slate-400 uppercase mb-2 ml-1">당신의 행동</h3>
-        <div className="flex items-end gap-2">
+      <div className="p-2 pb-0 sm:p-4 border-t border-slate-200 bg-white">
+        <div className="flex items-center justify-between mb-2 ml-1 gap-2">
+          <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setActionMode('normal')}
+              className={`px-2.5 py-1 text-[11px] font-semibold ${actionMode === 'normal' ? 'bg-white text-slate-800' : 'text-slate-500'}`}
+            >
+              일반행동
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setActionMode('skill');
+                if (!selectedSkillName && activeSkills.length > 0) setSelectedSkillName(activeSkills[0].name);
+              }}
+              className={`px-2.5 py-1 text-[11px] font-semibold border-l border-slate-200 ${actionMode === 'skill' ? 'bg-white text-slate-800' : 'text-slate-500'}`}
+            >
+              스킬 사용
+            </button>
+          </div>
+          {!actionInputDisabled && (
+            <span className="text-[11px] text-slate-400 whitespace-nowrap">
+              Enter 제출, Shift+Enter 줄바꿈
+            </span>
+          )}
+        </div>
+        <div className="flex items-stretch gap-2">
+          {actionMode === 'skill' && (
+            <div className="w-[130px] sm:w-[180px] shrink-0">
+              <select
+                value={selectedSkillName}
+                onChange={(e) => setSelectedSkillName(e.target.value)}
+                className="w-full h-full min-h-12 bg-slate-50 text-slate-900 px-2 py-2 rounded-lg text-xs sm:text-sm border border-slate-200 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                disabled={actionInputDisabled || !currentSession || !currentCharacter || activeSkills.length === 0}
+              >
+                {activeSkills.length === 0 ? (
+                  <option value="">액티브 스킬 없음</option>
+                ) : (
+                  <>
+                    {!selectedSkillName && <option value="">스킬 선택</option>}
+                    {activeSkills.map((s: any) => {
+                      const ready = Number(currentCharacter?.data?.skill_cooldowns?.[s.name] ?? 0);
+                      const left = Math.max(0, ready - currentNarrativeTurn);
+                      return (
+                        <option key={s.name} value={s.name}>
+                          {left > 0 ? `${s.name} (남은 ${left})` : s.name}
+                        </option>
+                      );
+                    })}
+                  </>
+                )}
+              </select>
+            </div>
+          )}
           <div className="relative flex-1">
             <textarea
               ref={actionInputRef}
@@ -761,40 +915,62 @@ export default function CenterPane() {
               value={actionText}
               onChange={(e) => setActionText(e.target.value)}
               onKeyDown={handleActionInputKeyDown}
-              placeholder={actionInputDisabled ? "운명이 펼쳐지고 있습니다..." : "행동을 설명하세요..."}
-              className="w-full min-h-[48px] max-h-48 resize-none bg-slate-50 text-slate-900 px-4 py-3 rounded-lg text-sm border border-slate-200 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 transition-all placeholder:text-slate-400 disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-slate-100"
-              disabled={actionInputDisabled || !currentSession || !currentCharacter}
+              placeholder={
+                actionInputDisabled
+                  ? '운명이 펼쳐지고 있습니다...'
+                  : actionMode === 'skill'
+                  ? '스킬 사용 장면을 설명하세요...'
+                  : '행동을 설명하세요...'
+              }
+              className="w-full min-h-12 max-h-48 resize-none bg-slate-50 text-slate-900 px-4 py-2.5 leading-6 rounded-lg text-base sm:text-sm border border-slate-200 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 transition-all placeholder:text-slate-400 disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-slate-100"
+              disabled={
+                actionInputDisabled ||
+                !currentSession ||
+                !currentCharacter ||
+                (actionMode === 'skill' && activeSkills.length === 0)
+              }
             />
           </div>
           
           <button
             onClick={handleSubmitAction}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-3 sm:px-6 rounded-lg text-sm font-bold shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none"
-            disabled={actionInputDisabled || !actionText.trim() || !currentSession || !currentCharacter}
+            className="bg-blue-600 hover:bg-blue-700 text-white px-4 sm:px-6 rounded-lg text-sm font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center self-stretch my-px"
+            disabled={
+              actionInputDisabled ||
+              !actionText.trim() ||
+              !currentSession ||
+              !currentCharacter ||
+              (actionMode === 'skill' && (!selectedSkillName || selectedSkillCooldownLeft > 0))
+            }
           >
             행동
           </button>
         </div>
         
-        <div className="h-5 mt-1 flex items-center justify-between px-1">
-            {!actionInputDisabled && (
-            <span className="text-[11px] text-slate-400">
-                Enter 제출, Shift+Enter 줄바꿈
-            </span>
-            )}
+        {(actionInputDisabled || (!currentCharacter && currentSession) || (actionMode === 'skill' && activeSkills.length === 0) || (actionMode === 'skill' && selectedSkillCooldownLeft > 0)) && (
+          <div className="mt-1 flex items-center justify-between px-1 gap-2">
             {actionInputDisabled && (
-            <span className="text-[11px] text-yellow-600 font-medium flex items-center gap-1.5 animate-pulse">
+              <span className="text-[11px] text-yellow-600 font-medium flex items-center gap-1.5 animate-pulse">
                 <span className="w-1.5 h-1.5 bg-yellow-600 rounded-full"></span>
                 게임 마스터가 고민 중입니다...
-            </span>
+              </span>
             )}
-            
+
             {!currentCharacter && currentSession && (
-            <span className="text-[11px] text-slate-400 italic">
+              <span className="text-[11px] text-slate-400 italic">
                 * 참여하려면 캐릭터를 생성하세요
-            </span>
+              </span>
             )}
-        </div>
+
+            {actionMode === 'skill' && activeSkills.length === 0 && (
+              <span className="text-[11px] text-amber-700">* 사용할 수 있는 액티브 스킬이 없습니다</span>
+            )}
+
+            {actionMode === 'skill' && selectedSkillCooldownLeft > 0 && (
+              <span className="text-[11px] text-amber-700">* 선택한 스킬 쿨타임: 남은 {selectedSkillCooldownLeft}턴</span>
+            )}
+          </div>
+        )}
       </div>
       
       {/* Story Steering Modal */}
@@ -823,6 +999,39 @@ export default function CenterPane() {
               className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-100 focus:border-violet-400"
             />
 
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <button
+                onClick={() => setStoryControls((s) => ({ ...s, end_crisis: !s.end_crisis }))}
+                className={`px-3 py-2 rounded-lg border text-sm font-medium ${storyControls.end_crisis ? 'bg-violet-50 border-violet-300 text-violet-800' : 'bg-white border-slate-300 text-slate-700'}`}
+              >
+                위기종료
+              </button>
+              <button
+                onClick={() => setStoryControls((s) => ({ ...s, focus_main_goal: !s.focus_main_goal }))}
+                className={`px-3 py-2 rounded-lg border text-sm font-medium ${storyControls.focus_main_goal ? 'bg-violet-50 border-violet-300 text-violet-800' : 'bg-white border-slate-300 text-slate-700'}`}
+              >
+                목표집중
+              </button>
+              <button
+                onClick={() => setStoryControls((s) => ({ ...s, limit_consecutive_crisis: !s.limit_consecutive_crisis }))}
+                className={`px-3 py-2 rounded-lg border text-sm font-medium ${storyControls.limit_consecutive_crisis ? 'bg-violet-50 border-violet-300 text-violet-800' : 'bg-white border-slate-300 text-slate-700'}`}
+              >
+                연속위기제한
+              </button>
+              <button
+                onClick={() => setStoryControls((s) => ({ ...s, pace: s.pace === 'up' ? 'neutral' : 'up' }))}
+                className={`px-3 py-2 rounded-lg border text-sm font-medium ${storyControls.pace === 'up' ? 'bg-violet-50 border-violet-300 text-violet-800' : 'bg-white border-slate-300 text-slate-700'}`}
+              >
+                페이스업
+              </button>
+              <button
+                onClick={() => setStoryControls((s) => ({ ...s, pace: s.pace === 'down' ? 'neutral' : 'down' }))}
+                className={`col-span-2 px-3 py-2 rounded-lg border text-sm font-medium ${storyControls.pace === 'down' ? 'bg-violet-50 border-violet-300 text-violet-800' : 'bg-white border-slate-300 text-slate-700'}`}
+              >
+                페이스다운
+              </button>
+            </div>
+
             <div className="mt-4 flex items-center justify-between gap-2">
               <button
                 onClick={handleRegenerateLatestStory}
@@ -836,7 +1045,7 @@ export default function CenterPane() {
                   onClick={() => {
                     setHostInstructionText('');
                     if (currentSession) {
-                      emit('set_story_instruction', { session_id: currentSession.id, instruction: '' });
+                      emit('set_story_instruction', { session_id: currentSession.id, instruction: '', controls: storyControls });
                     }
                   }}
                   className="px-3 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm font-medium hover:bg-slate-50"

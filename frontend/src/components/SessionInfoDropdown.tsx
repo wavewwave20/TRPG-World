@@ -64,20 +64,20 @@ export default function SessionInfoDropdown() {
   if (!currentSession) return null;
 
   return (
-    <div className="relative" ref={dropdownRef}>
+    <div className="relative min-w-0" ref={dropdownRef}>
       {/* Trigger */}
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm font-medium transition-all border ${
+        className={`flex items-center gap-1 px-2 py-1.5 sm:px-2.5 sm:py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all border min-w-0 max-w-[120px] sm:max-w-[220px] ${
           isOpen
             ? 'bg-blue-50 text-blue-700 border-blue-200'
             : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
         }`}
       >
-        <span className="truncate max-w-[80px] sm:max-w-[140px]">
+        <span className="truncate max-w-[62px] sm:max-w-[140px]">
           {currentSession.title}
         </span>
-        <span className="flex items-center gap-0.5 text-xs text-slate-500 border-l border-slate-300 pl-1.5 ml-0.5">
+        <span className="flex items-center gap-0.5 text-[10px] sm:text-xs text-slate-500 border-l border-slate-300 pl-1 ml-0.5 shrink-0">
           <span className="text-green-500">●</span>
           {participants.length}
         </span>

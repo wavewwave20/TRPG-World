@@ -63,29 +63,150 @@ def register_handlers(sio):
             player_id = data.get("player_id")
             character_name = data.get("character_name")
             action_text = data.get("action_text", "").strip()
+            action_mode = (data.get("action_mode") or "normal").strip().lower()
+            skill_name = (data.get("skill_name") or "").strip() or None
 
             # 빈 행동 텍스트 검증
             if not action_text:
                 await sio.emit("error", {"message": "행동 텍스트가 비어있습니다"}, room=sid)
                 return
 
-            # 액션 추가
-            action = add_action(session_id, player_id, character_name, action_text)
+            if action_mode not in {"normal", "skill"}:
+                await sio.emit("error", {"message": "action_mode 값이 올바르지 않습니다"}, room=sid)
+                return
 
-            # action_submitted 이벤트 브로드캐스트
-            room_name = f"session_{session_id}"
-            queue = get_queue(session_id)
-            await sio.emit(
-                "action_submitted",
-                {
-                    "session_id": session_id,
-                    "action": action,
-                    "queue_count": len(queue),
-                },
-                room=room_name,
-            )
+            skill_ability = None
 
-            logger.info(f"행동 제출: 세션={session_id}, 플레이어={player_id}, 캐릭터={character_name}")
+            db = SessionLocal()
+            try:
+                if action_mode == "skill":
+                    if not skill_name:
+                        await sio.emit("error", {"message": "스킬 사용 모드에서는 스킬 선택이 필요합니다"}, room=sid)
+                        return
+
+                    participant = (
+                        db.query(SessionParticipant)
+                        .filter(
+                            SessionParticipant.session_id == session_id,
+                            SessionParticipant.user_id == player_id,
+                        )
+                        .first()
+                    )
+                    if not participant:
+                        await sio.emit("error", {"message": "세션 참가 캐릭터를 찾을 수 없습니다"}, room=sid)
+                        return
+
+                    character = db.query(Character).filter(Character.id == participant.character_id).first()
+                    if not character:
+                        await sio.emit("error", {"message": "캐릭터를 찾을 수 없습니다"}, room=sid)
+                        return
+
+                    skills = character.data.get("skills", []) if isinstance(character.data, dict) else []
+                    active_skill = None
+                    for s in skills:
+                        if not isinstance(s, dict):
+                            continue
+                        if (s.get("name") or "").strip() != skill_name:
+                            continue
+                        if (s.get("type") or "").strip().lower() != "active":
+                            continue
+                        active_skill = s
+                        break
+
+                    if not active_skill:
+                        await sio.emit("error", {"message": "사용 가능한 액티브 스킬을 찾을 수 없습니다"}, room=sid)
+                        return
+
+                    skill_ability = (active_skill.get("ability") or "dexterity").strip().lower()
+                    if skill_ability not in {
+                        "strength",
+                        "dexterity",
+                        "constitution",
+                        "intelligence",
+                        "wisdom",
+                        "charisma",
+                    }:
+                        skill_ability = "dexterity"
+
+                    cooldown_actions = active_skill.get("cooldown_actions", active_skill.get("cooldown", 3))
+                    try:
+                        cooldown_actions = int(3 if cooldown_actions is None else cooldown_actions)
+                    except (TypeError, ValueError):
+                        cooldown_actions = 3
+                    cooldown_actions = max(0, cooldown_actions)
+
+                    current_narrative_turn = (
+                        db.query(StoryLog)
+                        .filter(StoryLog.session_id == session_id, StoryLog.role == "AI")
+                        .count()
+                    )
+
+                    char_data = character.data if isinstance(character.data, dict) else {}
+                    cooldown_map = char_data.get("skill_cooldowns", {})
+                    if not isinstance(cooldown_map, dict):
+                        cooldown_map = {}
+
+                    ready_turn = int(cooldown_map.get(skill_name, 0) or 0)
+                    if current_narrative_turn < ready_turn:
+                        remaining = ready_turn - current_narrative_turn
+                        await sio.emit(
+                            "error",
+                            {
+                                "message": f"{skill_name} 쿨타임 중입니다. 남은 스토리 진행 {remaining}회",
+                            },
+                            room=sid,
+                        )
+                        return
+
+                    next_ready_turn = current_narrative_turn + cooldown_actions
+                    cooldown_map[skill_name] = next_ready_turn
+                    char_data["skill_cooldowns"] = cooldown_map
+                    # JSON 필드 dirty 감지를 확실히 하기 위해 새 dict 객체로 재할당
+                    character.data = {**char_data}
+                    db.commit()
+
+                    await sio.emit(
+                        "skill_cooldown_updated",
+                        {
+                            "session_id": session_id,
+                            "character_id": character.id,
+                            "skill_name": skill_name,
+                            "ready_turn": next_ready_turn,
+                            "current_turn": current_narrative_turn,
+                            "remaining": max(0, next_ready_turn - current_narrative_turn),
+                        },
+                        room=f"session_{session_id}",
+                    )
+
+                # 액션 추가
+                action = add_action(
+                    session_id,
+                    player_id,
+                    character_name,
+                    action_text,
+                    action_mode=action_mode,
+                    skill_name=skill_name,
+                    skill_ability=skill_ability,
+                )
+
+                # action_submitted 이벤트 브로드캐스트
+                room_name = f"session_{session_id}"
+                queue = get_queue(session_id)
+                await sio.emit(
+                    "action_submitted",
+                    {
+                        "session_id": session_id,
+                        "action": action,
+                        "queue_count": len(queue),
+                    },
+                    room=room_name,
+                )
+
+                logger.info(
+                    f"행동 제출: 세션={session_id}, 플레이어={player_id}, 캐릭터={character_name}, 모드={action_mode}, 스킬={skill_name}"
+                )
+            finally:
+                db.close()
 
         except Exception as e:
             print(f"submit_action 에러: {e}")
@@ -352,6 +473,16 @@ def register_handlers(sio):
                     # 액션을 PlayerAction으로 변환
                     player_actions = []
                     for action in actions:
+                        action_type_value = (action.get("skill_ability") or "dexterity").lower()
+                        action_type_enum = {
+                            "strength": ActionType.STRENGTH,
+                            "dexterity": ActionType.DEXTERITY,
+                            "constitution": ActionType.CONSTITUTION,
+                            "intelligence": ActionType.INTELLIGENCE,
+                            "wisdom": ActionType.WISDOM,
+                            "charisma": ActionType.CHARISMA,
+                        }.get(action_type_value, ActionType.DEXTERITY)
+
                         # SessionParticipant에서 캐릭터 찾기
                         participant = (
                             db.query(SessionParticipant)
@@ -369,7 +500,7 @@ def register_handlers(sio):
                                     PlayerAction(
                                         character_id=char.id,
                                         action_text=action["action_text"],
-                                        action_type=ActionType.DEXTERITY,  # 기본값
+                                        action_type=action_type_enum,
                                     )
                                 )
                                 logger.info(f"행동 매핑: 유저 {action['player_id']} -> 캐릭터 {char.id} ({char.name})")
@@ -386,7 +517,7 @@ def register_handlers(sio):
                                     PlayerAction(
                                         character_id=char.id,
                                         action_text=action["action_text"],
-                                        action_type=ActionType.DEXTERITY,
+                                        action_type=action_type_enum,
                                     )
                                 )
                                 logger.info(f"캐릭터명으로 매핑: {action['character_name']} -> {char.id}")

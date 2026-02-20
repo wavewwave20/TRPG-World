@@ -32,6 +32,10 @@ class StoryDirectorState:
     forbidden_drifts: list[str] = field(default_factory=list)
     last_situation: str = ""
     host_instruction: str = ""
+    end_crisis: bool = False
+    focus_main_goal: bool = False
+    limit_consecutive_crisis: bool = False
+    pace: str = "neutral"  # up|down|neutral
 
 
 class StoryDirectorService:
@@ -87,6 +91,12 @@ class StoryDirectorService:
                 "불필요한 분기나 무관한 사건 삽입은 피하세요."
             )
 
+        if state.end_crisis:
+            scene_instruction = (
+                "현재 위기를 종료하는 전개를 우선하세요. 새로운 적 출현/증원, 전투 확대, 추격 재점화는 금지합니다. "
+                "탈출 성공, 봉쇄 성공, 안전지대 진입, 추적 단절 중 최소 하나를 장면 안에 명시하세요."
+            )
+
         sub_goal_text = ", ".join(state.sub_goals) if state.sub_goals else "(none)"
         forbidden_text = ", ".join(state.forbidden_drifts) if state.forbidden_drifts else "(none)"
         host_instruction_block = ""
@@ -97,6 +107,28 @@ class StoryDirectorService:
                 f"- {state.host_instruction.strip()}\n"
             )
 
+        controls_block = (
+            "\n### Host Story Controls (Persistent Toggles)\n"
+            f"- end_crisis: {'on' if state.end_crisis else 'off'}\n"
+            f"- focus_main_goal: {'on' if state.focus_main_goal else 'off'}\n"
+            f"- limit_consecutive_crisis: {'on' if state.limit_consecutive_crisis else 'off'}\n"
+            f"- pace: {state.pace}\n"
+        )
+
+        control_constraints: list[str] = []
+        if state.focus_main_goal:
+            control_constraints.append("메인 목표와 직접 연결되지 않은 분기 전개를 만들지 마세요.")
+        if state.limit_consecutive_crisis:
+            control_constraints.append(
+                "연속 위기 횟수가 높다면 완화/정리 장면을 선택하고 즉시 위기 강도를 올리지 마세요."
+            )
+        if state.pace == "up":
+            control_constraints.append("문장 길이를 줄이고 사건 전진량을 늘려 빠른 템포로 진행하세요.")
+        elif state.pace == "down":
+            control_constraints.append("속도를 낮추고 감정/관계/정보 정리 중심으로 진행하세요.")
+
+        control_constraints_text = "\n".join(f"- {c}" for c in control_constraints)
+
         return (
             "## Story Director Guidance (Rules, Non-negotiable)\n\n"
             f"- Main Goal: {state.main_goal}\n"
@@ -105,12 +137,14 @@ class StoryDirectorService:
             f"- Current Tension: {state.tension} (projected: {projected_tension})\n"
             f"- Consecutive Crisis Count: {state.consecutive_crisis}\n"
             f"- Forbidden Drift Keywords: {forbidden_text}\n"
+            f"{controls_block}"
             f"{host_instruction_block}\n"
             "### Direction Constraints\n"
             "1) Keep causal continuity with current scene.\n"
             "2) Do not derail from Main Goal.\n"
             "3) Respect tension control rule below.\n"
             f"4) {scene_instruction}\n"
+            f"{control_constraints_text}\n"
         )
 
     def set_host_instruction(
@@ -136,6 +170,36 @@ class StoryDirectorService:
         state = self.get_or_create_state(session_id, world_context, ai_summary)
         return state.host_instruction
 
+    def set_host_controls(
+        self,
+        session_id: int,
+        world_context: str,
+        ai_summary: str | None,
+        controls: dict | None,
+    ) -> StoryDirectorState:
+        state = self.get_or_create_state(session_id, world_context, ai_summary)
+        controls = controls or {}
+        state.end_crisis = bool(controls.get("end_crisis", False))
+        state.focus_main_goal = bool(controls.get("focus_main_goal", False))
+        state.limit_consecutive_crisis = bool(controls.get("limit_consecutive_crisis", False))
+        pace = str(controls.get("pace", "neutral")).lower().strip()
+        state.pace = pace if pace in {"up", "down", "neutral"} else "neutral"
+        return state
+
+    def get_host_controls(
+        self,
+        session_id: int,
+        world_context: str,
+        ai_summary: str | None,
+    ) -> dict:
+        state = self.get_or_create_state(session_id, world_context, ai_summary)
+        return {
+            "end_crisis": state.end_crisis,
+            "focus_main_goal": state.focus_main_goal,
+            "limit_consecutive_crisis": state.limit_consecutive_crisis,
+            "pace": state.pace,
+        }
+
     def commit_after_narrative(
         self,
         session_id: int,
@@ -155,6 +219,9 @@ class StoryDirectorService:
             state.consecutive_crisis += 1
         else:
             state.consecutive_crisis = 0
+
+        if state.limit_consecutive_crisis and state.consecutive_crisis > 2:
+            state.consecutive_crisis = 2
 
         situation = (metadata or {}).get("situation") if metadata else None
         if isinstance(situation, str):

@@ -77,14 +77,6 @@ export default function LeftPane() {
   
   return (
     <div className="h-full flex flex-col overflow-y-auto custom-scrollbar bg-slate-50/30">
-      <div className="p-4 border-b border-slate-200 bg-white sticky top-0 z-10">
-        <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-          <span className="text-blue-500">◈</span> 캐릭터
-        </h2>
-      </div>
-      
-      {/* Removed judgment status banner per request */}
-      
       <div className="p-4 flex-1">
         {/* Character Creation Form - Show only if no character exists */}
         {!currentCharacter && (

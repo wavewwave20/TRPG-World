@@ -41,6 +41,7 @@ function App() {
 
   const [selectedCharacter, setSelectedCharacter] = useState<Character | null>(null);
   const [showLLMSettings, setShowLLMSettings] = useState(false);
+  const [showMobileHeaderMenu, setShowMobileHeaderMenu] = useState(false);
   const showLobby = !currentSession;
 
   useEffect(() => {
@@ -120,9 +121,9 @@ function App() {
     <div className="h-screen w-screen bg-slate-50 text-slate-700 font-sans selection:bg-primary-100 selection:text-primary-900 overflow-hidden flex flex-col">
       
       {/* Navbar / Header Area - Application Shell */}
-      <header className="flex-none relative w-full h-16 bg-white border-b border-slate-200 z-50 shadow-sm">
-        <div className="h-full w-[95%] max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-4">
+      <header className="flex-none relative w-full h-14 sm:h-16 bg-white border-b border-slate-200 z-50 shadow-sm">
+        <div className="h-full w-[96%] max-w-7xl mx-auto flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
             {/* Back Button - Session View: back to lobby, Lobby View: back to character select */}
             {!showLobby ? (
               <button
@@ -144,7 +145,7 @@ function App() {
 
             {/* Logo / Title area */}
             <div className="flex items-center gap-2">
-              <h1 className="text-lg sm:text-xl font-bold text-slate-800 tracking-tight whitespace-nowrap">
+              <h1 className="text-base sm:text-xl font-bold text-slate-800 tracking-tight whitespace-nowrap">
                 TRPG World 
                 <span className="text-slate-400 font-normal text-sm ml-2 hidden md:inline-block border-l border-slate-300 pl-2">
                   Digital Tabletop
@@ -153,18 +154,72 @@ function App() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            {/* Session Info Dropdown - Only in game view */}
+          <div className="flex items-center gap-1 sm:gap-2 min-w-0 relative">
             {!showLobby && currentSession && <SessionInfoDropdown />}
 
-            {/* Host End Session Button - Only in game view for host */}
+            {/* mobile compact menu */}
+            {!showLobby && (
+              <div className="sm:hidden relative">
+                <button
+                  onClick={() => setShowMobileHeaderMenu((v) => !v)}
+                  className="w-9 h-9 rounded-lg border border-slate-200 bg-white text-slate-700"
+                >
+                  ☰
+                </button>
+                {showMobileHeaderMenu && (
+                  <div className="absolute right-0 top-full mt-2 w-44 rounded-lg border border-slate-200 bg-white shadow-lg p-2 z-50">
+                    {isHost && !showLobby && (
+                      <>
+                        <button
+                          onClick={() => {
+                            window.dispatchEvent(new Event('oc:open_moderation_modal'));
+                            setShowMobileHeaderMenu(false);
+                          }}
+                          className="w-full text-left px-2 py-2 text-xs rounded hover:bg-slate-50"
+                        >
+                          행동 결정
+                        </button>
+                        <button
+                          onClick={() => {
+                            window.dispatchEvent(new Event('oc:open_story_steering_modal'));
+                            setShowMobileHeaderMenu(false);
+                          }}
+                          className="w-full text-left px-2 py-2 text-xs rounded hover:bg-slate-50"
+                        >
+                          스토리 조정
+                        </button>
+                        <button
+                          onClick={() => {
+                            window.dispatchEvent(new Event('oc:host_advance_story'));
+                            setShowMobileHeaderMenu(false);
+                          }}
+                          className="w-full text-left px-2 py-2 text-xs rounded hover:bg-slate-50"
+                        >
+                          스토리 진행
+                        </button>
+                        <hr className="my-1 border-slate-200" />
+                      </>
+                    )}
+                    {isHost && (
+                      <button onClick={() => { handleEndSession(); setShowMobileHeaderMenu(false); }} className="w-full text-left px-2 py-2 text-xs rounded hover:bg-slate-50 text-red-600">
+                        방 종료
+                      </button>
+                    )}
+                    <div className="px-2 py-2 text-xs text-slate-600">
+                      상태: {connected ? '온라인' : error ? '오류' : '연결중'}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* desktop controls */}
             {!showLobby && isHost && (
               <button
                 onClick={handleEndSession}
-                className="px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 transition-all whitespace-nowrap"
+                className="hidden sm:inline-flex px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg text-[11px] sm:text-sm font-semibold bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 transition-all whitespace-nowrap"
               >
-                <span className="hidden sm:inline">방 종료</span>
-                <span className="inline sm:hidden">종료</span>
+                방 종료
               </button>
             )}
 
@@ -181,8 +236,7 @@ function App() {
               </button>
             )}
 
-            {/* Connection Status Pill */}
-            <div className={`px-3 sm:px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold transition-all whitespace-nowrap shadow-sm border ${
+            <div className={`hidden sm:flex px-2 sm:px-4 py-1.5 sm:py-2 rounded-lg items-center gap-1.5 sm:gap-2 text-xs sm:text-sm font-semibold transition-all whitespace-nowrap shadow-sm border shrink-0 ${
               connected
                 ? 'bg-green-50 text-green-700 border-green-200'
                 : error
@@ -192,11 +246,8 @@ function App() {
               <div className={`w-2.5 h-2.5 rounded-full ${
                 connected ? 'bg-green-500' : error ? 'bg-red-500' : 'bg-yellow-500'
               } ${connected ? 'animate-pulse' : ''}`} />
-              <span className="hidden sm:inline">
+              <span>
                 {connected ? '시스템 온라인' : error ? '연결 오류' : '연결 중...'}
-              </span>
-              <span className="inline sm:hidden uppercase text-xs font-bold">
-                {connected ? '온라인' : error ? '오류' : '...'}
               </span>
             </div>
           </div>
