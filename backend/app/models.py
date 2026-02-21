@@ -267,6 +267,9 @@ class ActionJudgment(Base):
     story_log_id = Column(Integer, ForeignKey("story_logs.id"), nullable=True)
 
     action_text = Column(Text, nullable=False)
+    action_mode = Column(String(20), nullable=False, default="normal", server_default="normal")
+    skill_name = Column(String(120), nullable=True)
+    skill_description = Column(Text, nullable=True)
     action_type = Column(String(50), nullable=True)  # strength, dexterity 등
     dice_result = Column(Integer, nullable=True)  # Phase 2까지 null
     modifier = Column(Integer, nullable=False)

@@ -76,6 +76,8 @@ def register_handlers(sio):
                 return
 
             skill_ability = None
+            skill_description = None
+            skill_cooldown_remaining = None
 
             db = SessionLocal()
             try:
@@ -118,6 +120,7 @@ def register_handlers(sio):
                         return
 
                     skill_ability = (active_skill.get("ability") or "dexterity").strip().lower()
+                    skill_description = (active_skill.get("description") or "").strip() or None
                     if skill_ability not in {
                         "strength",
                         "dexterity",
@@ -158,25 +161,9 @@ def register_handlers(sio):
                         )
                         return
 
-                    next_ready_turn = current_narrative_turn + cooldown_actions
-                    cooldown_map[skill_name] = next_ready_turn
-                    char_data["skill_cooldowns"] = cooldown_map
-                    # JSON 필드 dirty 감지를 확실히 하기 위해 새 dict 객체로 재할당
-                    character.data = {**char_data}
-                    db.commit()
-
-                    await sio.emit(
-                        "skill_cooldown_updated",
-                        {
-                            "session_id": session_id,
-                            "character_id": character.id,
-                            "skill_name": skill_name,
-                            "ready_turn": next_ready_turn,
-                            "current_turn": current_narrative_turn,
-                            "remaining": max(0, next_ready_turn - current_narrative_turn),
-                        },
-                        room=f"session_{session_id}",
-                    )
+                    # 제출 단계에서는 쿨타임을 예약하지 않습니다.
+                    # (호스트가 commit하기 전 수정/삭제 가능)
+                    skill_cooldown_remaining = max(0, ready_turn - current_narrative_turn)
 
                 # 액션 추가
                 action = add_action(
@@ -187,6 +174,8 @@ def register_handlers(sio):
                     action_mode=action_mode,
                     skill_name=skill_name,
                     skill_ability=skill_ability,
+                    skill_description=skill_description,
+                    skill_cooldown_remaining=skill_cooldown_remaining,
                 )
 
                 # action_submitted 이벤트 브로드캐스트
@@ -419,6 +408,72 @@ def register_handlers(sio):
                 # 액션을 order 기준으로 정렬하여 가져오고 큐 비우기
                 actions = clear_queue(session_id)
 
+                # 스킬 쿨타임 적용: submit 시점이 아니라 commit 시점에 확정
+                current_narrative_turn = (
+                    db.query(StoryLog)
+                    .filter(StoryLog.session_id == session_id, StoryLog.role == "AI")
+                    .count()
+                )
+                for action in actions:
+                    if action.get("action_mode") != "skill" or not action.get("skill_name"):
+                        continue
+
+                    participant = (
+                        db.query(SessionParticipant)
+                        .filter(
+                            SessionParticipant.session_id == session_id,
+                            SessionParticipant.user_id == action["player_id"],
+                        )
+                        .first()
+                    )
+                    if not participant:
+                        continue
+
+                    character = db.query(Character).filter(Character.id == participant.character_id).first()
+                    if not character or not isinstance(character.data, dict):
+                        continue
+
+                    skills = character.data.get("skills", [])
+                    selected_skill = None
+                    for s in skills:
+                        if not isinstance(s, dict):
+                            continue
+                        if (s.get("name") or "").strip() == action["skill_name"]:
+                            selected_skill = s
+                            break
+
+                    cooldown_actions = 3
+                    if isinstance(selected_skill, dict):
+                        raw_cd = selected_skill.get("cooldown_actions", selected_skill.get("cooldown", 3))
+                        try:
+                            cooldown_actions = int(3 if raw_cd is None else raw_cd)
+                        except (TypeError, ValueError):
+                            cooldown_actions = 3
+                    cooldown_actions = max(0, cooldown_actions)
+
+                    char_data = character.data
+                    cooldown_map = char_data.get("skill_cooldowns", {})
+                    if not isinstance(cooldown_map, dict):
+                        cooldown_map = {}
+
+                    next_ready_turn = current_narrative_turn + cooldown_actions
+                    cooldown_map[action["skill_name"]] = next_ready_turn
+                    char_data["skill_cooldowns"] = cooldown_map
+                    character.data = {**char_data}
+
+                    await sio.emit(
+                        "skill_cooldown_updated",
+                        {
+                            "session_id": session_id,
+                            "character_id": character.id,
+                            "skill_name": action["skill_name"],
+                            "ready_turn": next_ready_turn,
+                            "current_turn": current_narrative_turn,
+                            "remaining": max(0, next_ready_turn - current_narrative_turn),
+                        },
+                        room=f"session_{session_id}",
+                    )
+
                 # 행동 텍스트를 내러티브 형식으로 결합
                 narrative_parts = [f"{action['character_name']}: {action['action_text']}" for action in actions]
                 combined_narrative = "\n".join(narrative_parts)
@@ -501,6 +556,10 @@ def register_handlers(sio):
                                         character_id=char.id,
                                         action_text=action["action_text"],
                                         action_type=action_type_enum,
+                                        action_mode=action.get("action_mode", "normal"),
+                                        skill_name=action.get("skill_name"),
+                                        skill_description=action.get("skill_description"),
+                                        action_type_locked=(action.get("action_mode") == "skill"),
                                     )
                                 )
                                 logger.info(f"행동 매핑: 유저 {action['player_id']} -> 캐릭터 {char.id} ({char.name})")
@@ -518,6 +577,10 @@ def register_handlers(sio):
                                         character_id=char.id,
                                         action_text=action["action_text"],
                                         action_type=action_type_enum,
+                                        action_mode=action.get("action_mode", "normal"),
+                                        skill_name=action.get("skill_name"),
+                                        skill_description=action.get("skill_description"),
+                                        action_type_locked=(action.get("action_mode") == "skill"),
                                     )
                                 )
                                 logger.info(f"캐릭터명으로 매핑: {action['character_name']} -> {char.id}")
@@ -551,6 +614,9 @@ def register_handlers(sio):
                                 {
                                     "character_id": analysis.character_id,
                                     "action_text": analysis.action_text,
+                                    "action_mode": analysis.action_mode,
+                                    "skill_name": analysis.skill_name,
+                                    "skill_description": analysis.skill_description,
                                     "action_type": analysis.action_type.value,
                                     "modifier": analysis.modifier,
                                     "difficulty": analysis.difficulty,
@@ -614,6 +680,9 @@ def register_handlers(sio):
                                         "character_id": analysis.character_id,
                                         "judgment_id": action_judgment.id,
                                         "action_text": analysis.action_text,
+                                        "action_mode": analysis.action_mode,
+                                        "skill_name": analysis.skill_name,
+                                        "skill_description": analysis.skill_description,
                                         "action_type": analysis.action_type.value,
                                         "modifier": analysis.modifier,
                                         "difficulty": analysis.difficulty,
@@ -632,6 +701,9 @@ def register_handlers(sio):
                                 "character_name": character.name,
                                 "judgment_id": action_judgment.id,
                                 "action_text": analysis.action_text,
+                                "action_mode": analysis.action_mode,
+                                "skill_name": analysis.skill_name,
+                                "skill_description": analysis.skill_description,
                                 "action_type": analysis.action_type.value,
                                 "modifier": analysis.modifier,
                                 "difficulty": analysis.difficulty,

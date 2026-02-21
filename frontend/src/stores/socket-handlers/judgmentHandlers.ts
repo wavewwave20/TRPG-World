@@ -4,6 +4,7 @@ import { resolveAbilityScore, computeRequiresRoll } from '../../utils/judgment';
 import { useGameStore } from '../gameStore';
 import { useActionStore } from '../actionStore';
 import { useAIStore } from '../aiStore';
+import { getCharacter } from '../../services/api';
 
 /** 서버에서 수신하는 judgment raw 데이터 */
 interface RawJudgmentData {
@@ -211,6 +212,47 @@ export function registerJudgmentHandlers(socket: Socket) {
         ? `${data.character_name}: 자동 성공`
         : `${data.character_name}: 주사위 ${data.dice_result} (${outcomeText[data.outcome] || data.outcome})`,
     });
+  });
+
+  // Skill cooldown updated - refresh character sheet immediately
+  socket.on('skill_cooldown_updated', async (data: {
+    session_id: number;
+    character_id: number;
+    skill_name: string;
+    ready_turn: number;
+    current_turn: number;
+    remaining: number;
+  }) => {
+    const state = useGameStore.getState();
+    const currentCharacter = state.currentCharacter;
+    const selectedParticipant = state.selectedParticipant;
+
+    const shouldRefreshCurrent = !!currentCharacter && currentCharacter.id === data.character_id;
+    const shouldRefreshSelected = !!selectedParticipant?.character && selectedParticipant.character.id === data.character_id;
+
+    if (!shouldRefreshCurrent && !shouldRefreshSelected) return;
+
+    try {
+      const refreshed = await getCharacter(data.character_id);
+
+      if (shouldRefreshCurrent) {
+        useGameStore.getState().setCharacter(refreshed);
+      }
+      if (shouldRefreshSelected && selectedParticipant) {
+        useGameStore.getState().setSelectedParticipant({
+          ...selectedParticipant,
+          character: refreshed,
+        });
+      }
+
+      const participants = useGameStore.getState().participants;
+      const nextParticipants = participants.map((p) =>
+        p.character_id === data.character_id ? { ...p, character: refreshed } : p
+      );
+      useGameStore.getState().setParticipants(nextParticipants);
+    } catch (e) {
+      console.error('Failed to refresh character after cooldown update', e);
+    }
   });
 
   // Dice roll error - recover local state and surface clear feedback

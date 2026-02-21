@@ -49,11 +49,18 @@ class PlayerAction(BaseModel):
         character_id: 행동을 수행하는 캐릭터의 ID
         action_text: 플레이어가 하고자 하는 행동의 설명
         action_type: 행동 유형 (사용할 능력치 결정)
+        action_mode: normal|skill
+        skill_name: 스킬 사용일 때 스킬 이름
+        action_type_locked: 입력 action_type을 고정해야 하는지 여부
     """
 
     character_id: int = Field(..., description="행동을 수행하는 캐릭터의 ID")
     action_text: str = Field(..., description="플레이어의 행동 설명")
     action_type: ActionType = Field(..., description="능력치 매핑을 위한 행동 유형")
+    action_mode: str = Field("normal", description="normal 또는 skill")
+    skill_name: str | None = Field(None, description="스킬 사용 시 스킬 이름")
+    skill_description: str | None = Field(None, description="스킬 사용 시 스킬 설명")
+    action_type_locked: bool = Field(False, description="입력된 action_type 고정 여부")
 
 
 class ActionAnalysis(BaseModel):
@@ -74,6 +81,9 @@ class ActionAnalysis(BaseModel):
     character_id: int = Field(..., description="행동을 수행하는 캐릭터의 ID")
     action_text: str = Field(..., description="분석된 행동")
     action_type: ActionType = Field(..., description="능력치 매핑을 위한 행동 유형")
+    action_mode: str = Field("normal", description="normal 또는 skill")
+    skill_name: str | None = Field(None, description="스킬 사용 시 스킬 이름")
+    skill_description: str | None = Field(None, description="스킬 사용 시 스킬 설명")
     modifier: int = Field(..., description="능력치, 스킬, 상태 효과로부터의 총 보정치")
     difficulty: int = Field(..., ge=0, le=30, description="LLM이 결정한 난이도 등급 (DC)")
     difficulty_reasoning: str = Field(..., description="DC에 대한 LLM의 추론")
@@ -129,6 +139,9 @@ class JudgmentResult(BaseModel):
 
     character_id: int = Field(..., description="캐릭터의 ID")
     action_text: str = Field(..., description="판정된 행동")
+    action_mode: str = Field("normal", description="normal 또는 skill")
+    skill_name: str | None = Field(None, description="스킬 사용 시 스킬 이름")
+    skill_description: str | None = Field(None, description="스킬 사용 시 스킬 설명")
     dice_result: int = Field(0, ge=0, le=20, description="D20 굴림 결과 (자동 성공 시 0)")
     modifier: int = Field(..., description="굴림에 적용된 총 보정치")
     final_value: int = Field(0, description="dice_result + modifier")

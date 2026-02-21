@@ -138,13 +138,23 @@ class AIGMServiceV2:
             )
 
             # AI 노드 호출
+            # 판정(Phase 1)은 최신 맥락 중심으로: 최근 스토리 여러 개를 넣어
+            # "방금 생성된 AI 스토리"가 빠지지 않게 합니다.
+            recent_story = game_context.story_history[-6:] if game_context.story_history else []
+            current_act_text = ""
+            if game_context.current_act:
+                current_act_text = f"현재 막: {game_context.current_act.act_number}막 - {game_context.current_act.title}"
+                if game_context.current_act.subtitle:
+                    current_act_text += f" ({game_context.current_act.subtitle})"
+
+            # 판정(Phase 1)은 세계관/장기요약 제거, 현재 막 + 최근 스토리만 사용
             analyses = await analyze_and_judge_actions(
                 player_actions=player_actions,
                 characters=game_context.characters,
-                world_context=game_context.world_prompt,
-                story_history=game_context.story_history[-1:],
+                world_context=current_act_text,
+                story_history=recent_story,
                 llm_model=self.llm_model,
-                ai_summary=game_context.ai_summary,
+                ai_summary=None,
             )
 
             logger.info(f"Phase 1 완료: {len(analyses)}개 행동 분석됨")
@@ -411,6 +421,9 @@ class AIGMServiceV2:
                 JudgmentResult(
                     character_id=row.character_id,
                     action_text=row.action_text,
+                    action_mode=(row.action_mode or "normal"),
+                    skill_name=row.skill_name,
+                    skill_description=row.skill_description,
                     dice_result=row.dice_result if row.dice_result is not None else 1,
                     modifier=row.modifier,
                     final_value=row.final_value if row.final_value is not None else row.modifier,
@@ -592,6 +605,9 @@ class AIGMServiceV2:
                     judgment = JudgmentResult(
                         character_id=analysis.character_id,
                         action_text=analysis.action_text,
+                        action_mode=analysis.action_mode,
+                        skill_name=analysis.skill_name,
+                        skill_description=analysis.skill_description,
                         dice_result=0,
                         modifier=analysis.modifier,
                         final_value=0,
@@ -607,6 +623,9 @@ class AIGMServiceV2:
                         session_id=session_id,
                         character_id=analysis.character_id,
                         action_text=analysis.action_text,
+                        action_mode=analysis.action_mode,
+                        skill_name=analysis.skill_name,
+                        skill_description=analysis.skill_description,
                         action_type=analysis.action_type.value,
                         dice_result=0,
                         modifier=analysis.modifier,
@@ -637,6 +656,9 @@ class AIGMServiceV2:
                 judgment = JudgmentResult(
                     character_id=analysis.character_id,
                     action_text=analysis.action_text,
+                    action_mode=analysis.action_mode,
+                    skill_name=analysis.skill_name,
+                    skill_description=analysis.skill_description,
                     dice_result=dice_roll,
                     modifier=analysis.modifier,
                     final_value=final_value,
@@ -651,6 +673,9 @@ class AIGMServiceV2:
                     session_id=session_id,
                     character_id=analysis.character_id,
                     action_text=analysis.action_text,
+                    action_mode=analysis.action_mode,
+                    skill_name=analysis.skill_name,
+                    skill_description=analysis.skill_description,
                     action_type=analysis.action_type.value,
                     dice_result=dice_roll,
                     modifier=analysis.modifier,
@@ -1086,6 +1111,9 @@ class AIGMServiceV2:
                     JudgmentResult(
                         character_id=j.character_id,
                         action_text=j.action_text,
+                        action_mode=(j.action_mode or "normal"),
+                        skill_name=j.skill_name,
+                        skill_description=j.skill_description,
                         dice_result=j.dice_result or 0,
                         modifier=j.modifier,
                         final_value=j.final_value or j.modifier,
@@ -1141,6 +1169,9 @@ class AIGMServiceV2:
                     character_id=judgment.character_id,
                     story_log_id=story_log.id,
                     action_text=judgment.action_text,
+                    action_mode=judgment.action_mode,
+                    skill_name=judgment.skill_name,
+                    skill_description=judgment.skill_description,
                     dice_result=judgment.dice_result,
                     modifier=judgment.modifier,
                     final_value=judgment.final_value,
@@ -1529,11 +1560,20 @@ class AIGMServiceV2:
 
         elif reward.growth_type == "new_skill":
             skill_data = reward.growth_detail.get("skill", {})
+            if not isinstance(skill_data, dict):
+                logger.warning(f"캐릭터 {character.name}: 잘못된 스킬 보상 형식, 스킵")
+                return
+
+            # 정책: Act 보상 스킬은 액티브만 허용
+            skill_data["type"] = "active"
+            if skill_data.get("cooldown_actions") is None:
+                skill_data["cooldown_actions"] = 3
+
             skills = data.get("skills", [])
             if isinstance(skills, list):
                 skills.append(skill_data)
                 data["skills"] = skills
-            logger.info(f"캐릭터 {character.name}: 새 스킬 '{skill_data.get('name', '?')}'")
+            logger.info(f"캐릭터 {character.name}: 새 액티브 스킬 '{skill_data.get('name', '?')}'")
 
         elif reward.growth_type == "weakness_mitigated":
             weakness_name = reward.growth_detail.get("weakness", "")
@@ -1541,16 +1581,28 @@ class AIGMServiceV2:
             weaknesses = data.get("weaknesses", [])
             updated = False
 
+            def _normalize_weakness_name(v: str) -> str:
+                # "촉촉한 피부: 설명..." 형태에서도 이름만 매칭되도록 정규화
+                base = (v or "").split(":", 1)[0].strip().lower()
+                return base
+
+            target = _normalize_weakness_name(weakness_name)
+
             for i, w in enumerate(weaknesses):
-                if isinstance(w, str) and w == weakness_name:
-                    # string → 객체로 변환
-                    weaknesses[i] = {"name": w, "mitigation": mitigation_delta}
-                    updated = True
-                    break
-                elif isinstance(w, dict) and w.get("name") == weakness_name:
-                    w["mitigation"] = w.get("mitigation", 0) + mitigation_delta
-                    updated = True
-                    break
+                if isinstance(w, str):
+                    w_norm = _normalize_weakness_name(w)
+                    if w_norm == target:
+                        # string → 객체로 변환 (원문 설명은 name에 유지)
+                        weaknesses[i] = {"name": w, "mitigation": mitigation_delta}
+                        updated = True
+                        break
+                elif isinstance(w, dict):
+                    w_name = str(w.get("name", ""))
+                    w_norm = _normalize_weakness_name(w_name)
+                    if w_norm == target:
+                        w["mitigation"] = w.get("mitigation", 0) + mitigation_delta
+                        updated = True
+                        break
 
             if updated:
                 data["weaknesses"] = weaknesses

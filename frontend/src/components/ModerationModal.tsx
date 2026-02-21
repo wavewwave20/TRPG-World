@@ -26,6 +26,10 @@ interface Action {
   player_id: number;
   character_name: string;
   action_text: string;
+  action_mode?: 'normal' | 'skill';
+  skill_name?: string | null;
+  skill_ability?: string | null;
+  skill_cooldown_remaining?: number | null;
   order: number;
 }
 
@@ -189,8 +193,16 @@ function SortableActionItem({
           )}
         </div>
       ) : (
-        <div className="text-sm text-slate-700 mt-2">
-          {action.action_text}
+        <div className="text-sm text-slate-700 mt-2 space-y-1">
+          {action.action_mode === 'skill' && action.skill_name && (
+            <div className="text-[11px] text-violet-700 font-semibold">
+              [스킬] {action.skill_name}
+              {typeof action.skill_cooldown_remaining === 'number' && action.skill_cooldown_remaining > 0
+                ? ` (${action.skill_cooldown_remaining}턴)`
+                : ''}
+            </div>
+          )}
+          <div>{action.action_text}</div>
         </div>
       )}
     </div>

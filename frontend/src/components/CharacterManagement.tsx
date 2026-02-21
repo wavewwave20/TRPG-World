@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuthStore } from '../stores/authStore';
 import { useGameStore } from '../stores/gameStore';
-import type { Character as BaseCharacter, Skill as BaseSkill, AbilityKey } from '../types/character';
+import type { Character as BaseCharacter, Skill as BaseSkill, AbilityKey, Weakness } from '../types/character';
 import { ABILITY_LABELS, ABILITY_SHORT_LABELS } from '../types/character';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '';
@@ -26,7 +26,7 @@ interface Character {
     wisdom: number;
     charisma: number;
     skills: Skill[];
-    weaknesses: string[];
+    weaknesses: (string | Weakness)[];
     status_effects: string[];
     inventory: any[];
     HP: number;
@@ -329,7 +329,7 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
     setWisdom(character.data.wisdom || 10);
     setCharisma(character.data.charisma || 10);
     setSkills(character.data.skills || []);
-    setWeaknesses(character.data.weaknesses || []);
+    setWeaknesses((character.data.weaknesses || []).map((w) => (typeof w === 'string' ? w : w.name)));
     setShowCreateForm(false);
   };
 
@@ -886,11 +886,16 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
                   <div className="mt-2">
                     <p className="text-xs text-slate-500 mb-1">약점:</p>
                     <div className="flex flex-wrap gap-1">
-                      {character.data.weaknesses.map((weakness) => (
-                        <span key={weakness} className="bg-red-100 text-red-800 px-2 py-0.5 rounded text-xs">
-                          {weakness}
-                        </span>
-                      ))}
+                      {character.data.weaknesses.map((weakness, idx) => {
+                        const weaknessName = typeof weakness === 'string' ? weakness : weakness.name;
+                        const mitigation = typeof weakness === 'string' ? 0 : (weakness.mitigation ?? 0);
+                        const label = mitigation > 0 ? `${weaknessName} (${mitigation}/3)` : weaknessName;
+                        return (
+                          <span key={`${weaknessName}-${idx}`} className="bg-red-100 text-red-800 px-2 py-0.5 rounded text-xs">
+                            {label}
+                          </span>
+                        );
+                      })}
                     </div>
                   </div>
                 )}

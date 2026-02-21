@@ -101,9 +101,12 @@ async def analyze_and_judge_actions(
             character_id=action.character_id,
             action_text=action.action_text,
             action_type=action.action_type,
+            action_mode=action.action_mode,
+            skill_name=action.skill_name,
+            skill_description=action.skill_description,
             modifier=modifier,
-            difficulty=15,  # 기본값, AI가 결정할 예정
-            difficulty_reasoning="",
+            difficulty=7,  # 기본값(표준 행동 구간), AI가 최종 결정
+            difficulty_reasoning="", 
         )
         analyses.append(analysis)
 
@@ -127,7 +130,7 @@ async def analyze_and_judge_actions(
         for analysis in analyses:
             dc_info = dc_results.get(analysis.character_id, {})
             analysis.difficulty = dc_info.get("difficulty", 15)
-            analysis.difficulty_reasoning = dc_info.get("reasoning", "기본 난이도 적용")
+            analysis.difficulty_reasoning = dc_info.get("reasoning", "현재 상황 정보가 제한적이라 보수적으로 난이도를 책정했다.")
 
             # requires_roll을 명시적 bool로 변환
             raw_requires_roll = dc_info.get("requires_roll", True)
@@ -137,7 +140,11 @@ async def analyze_and_judge_actions(
             ai_action_type_str = dc_info.get("action_type", "")
             if ai_action_type_str and ai_action_type_str in action_type_value_map:
                 ai_action_type = action_type_value_map[ai_action_type_str]
-                if ai_action_type != analysis.action_type:
+                # 스킬행동은 입력된 action_type을 고정값으로 취급
+                action_input = next((pa for pa in player_actions if pa.character_id == analysis.character_id and pa.action_text == analysis.action_text), None)
+                locked = bool(action_input.action_type_locked) if action_input else False
+
+                if ai_action_type != analysis.action_type and not locked:
                     character = char_map.get(analysis.character_id)
                     if character:
                         analysis.action_type = ai_action_type
@@ -178,7 +185,7 @@ async def analyze_and_judge_actions(
         # AI 실패 시 기본 DC 사용
         for analysis in analyses:
             analysis.difficulty = 15
-            analysis.difficulty_reasoning = f"기본 난이도 적용 (AI 오류: {e!s})"
+            analysis.difficulty_reasoning = "판정 근거를 충분히 해석하지 못해 임시 난이도를 적용했다."
 
     return analyses
 
@@ -259,10 +266,21 @@ async def _determine_difficulty_with_ai(
     # 캐릭터 정보
     char_info_list = []
     for char in characters:
+        skill_texts = []
+        for s in (char.skills or []):
+            if not isinstance(s, dict):
+                continue
+            s_name = s.get("name", "이름없음")
+            s_type = str(s.get("type", "")).lower() or "unknown"
+            s_ability = s.get("ability", "-")
+            skill_texts.append(f"{s_name}({s_type}, {s_ability})")
+        skills_line = ", ".join(skill_texts) if skill_texts else "없음"
+
         char_info = (
             f"- **{char.name}** (ID: {char.id})\n"
             f"  - 근력: {char.strength}, 민첩: {char.dexterity}, 건강: {char.constitution}\n"
-            f"  - 지능: {char.intelligence}, 지혜: {char.wisdom}, 매력: {char.charisma}"
+            f"  - 지능: {char.intelligence}, 지혜: {char.wisdom}, 매력: {char.charisma}\n"
+            f"  - 보유 스킬: {skills_line}"
         )
         char_info_list.append(char_info)
     context_parts.append("## 캐릭터 정보\n\n" + "\n".join(char_info_list))
@@ -278,13 +296,31 @@ async def _determine_difficulty_with_ai(
     # 행동 정보
     action_list = []
     for i, action in enumerate(player_actions, 1):
-        action_text = (
-            f"{i}. **캐릭터 ID {action.character_id}**\n"
-            f"   행동: {action.action_text}\n"
-            f"   행동 유형: {action.action_type.value}"
-        )
+        mode = (action.action_mode or "normal").lower()
+        if mode == "skill":
+            mode_line = f"스킬행동 (스킬: {action.skill_name or '미지정'})"
+            action_text = (
+                f"{i}. **캐릭터 ID {action.character_id}**\n"
+                f"   행동: {action.action_text}\n"
+                f"   행동 모드: {mode_line}\n"
+                f"   고정 행동 유형: {action.action_type.value}"
+            )
+        else:
+            mode_line = "일반행동"
+            action_text = (
+                f"{i}. **캐릭터 ID {action.character_id}**\n"
+                f"   행동: {action.action_text}\n"
+                f"   행동 모드: {mode_line}"
+            )
+
         action_list.append(action_text)
-    context_parts.append("## 분석할 행동\n\n" + "\n\n".join(action_list))
+    context_parts.append(
+        "## 분석할 행동\n\n"
+        "규칙:\n"
+        "- 일반행동: 행동 유형 참고값을 제공하지 않습니다. 행동 의미를 보고 최종 action_type을 판정하세요.\n"
+        "- 스킬행동: 고정 행동 유형을 유지하세요.\n\n"
+        + "\n\n".join(action_list)
+    )
 
     context_text = "\n\n".join(context_parts)
 

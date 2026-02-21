@@ -21,6 +21,8 @@ def add_action(
     action_mode: str = "normal",
     skill_name: str | None = None,
     skill_ability: str | None = None,
+    skill_description: str | None = None,
+    skill_cooldown_remaining: int | None = None,
 ) -> dict:
     """액션을 큐에 추가합니다.
 
@@ -59,6 +61,8 @@ def add_action(
         "action_mode": action_mode,
         "skill_name": skill_name,
         "skill_ability": skill_ability,
+        "skill_description": skill_description,
+        "skill_cooldown_remaining": skill_cooldown_remaining,
         "order": len(action_queues[session_id]),
     }
 

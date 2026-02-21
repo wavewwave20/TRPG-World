@@ -116,9 +116,20 @@ def _format_character_context(characters: list[CharacterSheet]) -> str:
         if passive_skills:
             char_info += f"\n  - 패시브: {', '.join(passive_skills)}"
 
-        active_skills = _extract_skill_names(char.skills, "active")
+        active_skills = []
+        for s in (char.skills or []):
+            if not isinstance(s, dict):
+                continue
+            if str(s.get("type", "")).lower() != "active":
+                continue
+            s_name = s.get("name", "이름없음")
+            s_desc = (s.get("description") or "").strip()
+            if s_desc:
+                active_skills.append(f"{s_name}: {s_desc}")
+            else:
+                active_skills.append(s_name)
         if active_skills:
-            char_info += f"\n  - 액티브: {', '.join(active_skills)}"
+            char_info += f"\n  - 액티브: {' | '.join(active_skills)}"
 
         weakness_names = _extract_weakness_names(char.weaknesses)
         if weakness_names:
@@ -206,15 +217,23 @@ async def generate_narrative(
         character = char_map.get(judgment.character_id)
         char_name = character.name if character else f"캐릭터 {judgment.character_id}"
 
+        mode_label = "스킬행동" if (judgment.action_mode or "normal") == "skill" else "일반행동"
+        skill_line = ""
+        if (judgment.action_mode or "normal") == "skill" and judgment.skill_name:
+            skill_desc = (judgment.skill_description or "").strip()
+            skill_line = f"\n   - 사용 스킬: {judgment.skill_name}" + (f" ({skill_desc})" if skill_desc else "")
+
         if judgment.outcome == JudgmentOutcome.AUTO_SUCCESS:
             judgment_text = (
                 f"{i}. **{char_name}**\n"
+                f"   - 행동 타입: {mode_label}{skill_line}\n"
                 f"   - 행동: {judgment.action_text}\n"
                 f"   - 결과: 자동 성공 (위험이 없는 행동)"
             )
         else:
             judgment_text = (
                 f"{i}. **{char_name}**\n"
+                f"   - 행동 타입: {mode_label}{skill_line}\n"
                 f"   - 행동: {judgment.action_text}\n"
                 f"   - 주사위: {judgment.dice_result}\n"
                 f"   - 보정치: {judgment.modifier:+d}\n"
@@ -364,15 +383,23 @@ async def generate_narrative_streaming(
         character = char_map.get(judgment.character_id)
         char_name = character.name if character else f"캐릭터 {judgment.character_id}"
 
+        mode_label = "스킬행동" if (judgment.action_mode or "normal") == "skill" else "일반행동"
+        skill_line = ""
+        if (judgment.action_mode or "normal") == "skill" and judgment.skill_name:
+            skill_desc = (judgment.skill_description or "").strip()
+            skill_line = f"\n   - 사용 스킬: {judgment.skill_name}" + (f" ({skill_desc})" if skill_desc else "")
+
         if judgment.outcome == JudgmentOutcome.AUTO_SUCCESS:
             judgment_text = (
                 f"{i}. **{char_name}**\n"
+                f"   - 행동 타입: {mode_label}{skill_line}\n"
                 f"   - 행동: {judgment.action_text}\n"
                 f"   - 결과: 자동 성공 (위험이 없는 행동)"
             )
         else:
             judgment_text = (
                 f"{i}. **{char_name}**\n"
+                f"   - 행동 타입: {mode_label}{skill_line}\n"
                 f"   - 행동: {judgment.action_text}\n"
                 f"   - 주사위: {judgment.dice_result}\n"
                 f"   - 보정치: {judgment.modifier:+d}\n"

@@ -294,6 +294,7 @@ export default function CenterPane() {
 
   // Load growth history on session change
   const setGrowthHistory = useActStore((state) => state.setGrowthHistory);
+  const pendingTransition = useActStore((state) => state.pendingTransition);
   useEffect(() => {
     if (!currentSessionId) {
       setGrowthHistory([]);
@@ -725,9 +726,7 @@ export default function CenterPane() {
         {/* Session Info or Create Button */}
         {currentSession ? (
           <div className="flex items-center gap-2 justify-end relative">
-            <div className="hidden sm:block">
-              <GrowthHistoryDropdown />
-            </div>
+            <GrowthHistoryDropdown />
             {/* Moderation Button - Only show when user is host */}
             {isHost && (
               <>
@@ -787,6 +786,21 @@ export default function CenterPane() {
       
       {/* Act Banner */}
       {currentSession && <ActBanner />}
+
+      {/* Host-only pending act transition CTA */}
+      {currentSession && isHost && pendingTransition && (
+        <div className="px-3 pt-2 sm:px-6 sm:pt-3 bg-slate-50/50">
+          <button
+            onClick={() => {
+              if (!currentSession) return;
+              emit('act_transition_display_start', { session_id: currentSession.id });
+            }}
+            className="w-full rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900 px-4 py-3 text-sm sm:text-base font-extrabold shadow-sm transition-all"
+          >
+            다들 스토리를 읽었어 → {pendingTransition.newAct.actNumber}막 진행
+          </button>
+        </div>
+      )}
 
       {/* Story Content Section */}
       <div className="flex-1 overflow-y-auto p-3 space-y-4 sm:p-6 sm:space-y-6 scroll-smooth bg-slate-50/50 relative">
@@ -899,7 +913,7 @@ export default function CenterPane() {
                       const left = Math.max(0, ready - currentNarrativeTurn);
                       return (
                         <option key={s.name} value={s.name}>
-                          {left > 0 ? `${s.name} (남은 ${left})` : s.name}
+                          {left > 0 ? `${s.name} (${left}턴)` : s.name}
                         </option>
                       );
                     })}
@@ -919,10 +933,12 @@ export default function CenterPane() {
                 actionInputDisabled
                   ? '운명이 펼쳐지고 있습니다...'
                   : actionMode === 'skill'
-                  ? '스킬 사용 장면을 설명하세요...'
+                  ? selectedSkillCooldownLeft > 0
+                    ? `*선택한 스킬 쿨타임: ${selectedSkillCooldownLeft}턴`
+                    : '스킬 사용 장면을 설명하세요...'
                   : '행동을 설명하세요...'
               }
-              className="w-full min-h-12 max-h-48 resize-none bg-slate-50 text-slate-900 px-4 py-2.5 leading-6 rounded-lg text-base sm:text-sm border border-slate-200 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 transition-all placeholder:text-slate-400 disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-slate-100"
+              className="w-full min-h-12 max-h-48 resize-none bg-slate-50 text-slate-900 px-4 py-2.5 leading-6 rounded-lg text-base sm:text-sm border border-slate-200 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 transition-all placeholder:text-xs sm:placeholder:text-sm placeholder:text-slate-400 disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-slate-100"
               disabled={
                 actionInputDisabled ||
                 !currentSession ||
@@ -947,7 +963,7 @@ export default function CenterPane() {
           </button>
         </div>
         
-        {(actionInputDisabled || (!currentCharacter && currentSession) || (actionMode === 'skill' && activeSkills.length === 0) || (actionMode === 'skill' && selectedSkillCooldownLeft > 0)) && (
+        {(actionInputDisabled || (!currentCharacter && currentSession) || (actionMode === 'skill' && activeSkills.length === 0)) && (
           <div className="mt-1 flex items-center justify-between px-1 gap-2">
             {actionInputDisabled && (
               <span className="text-[11px] text-yellow-600 font-medium flex items-center gap-1.5 animate-pulse">
@@ -966,9 +982,7 @@ export default function CenterPane() {
               <span className="text-[11px] text-amber-700">* 사용할 수 있는 액티브 스킬이 없습니다</span>
             )}
 
-            {actionMode === 'skill' && selectedSkillCooldownLeft > 0 && (
-              <span className="text-[11px] text-amber-700">* 선택한 스킬 쿨타임: 남은 {selectedSkillCooldownLeft}턴</span>
-            )}
+            {/* cooldown helper moved to placeholder */}
           </div>
         )}
       </div>
