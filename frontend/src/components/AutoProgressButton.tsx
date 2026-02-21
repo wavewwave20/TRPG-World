@@ -12,7 +12,7 @@ interface AutoProgressButtonProps {
  * Button with a left-to-right gauge fill animation that auto-clicks after the delay.
  * Used for auto-progress (자동진행) judgments that don't require a dice roll.
  */
-function AutoProgressButton({ onClick, className, children, delay = 1500 }: AutoProgressButtonProps) {
+function AutoProgressButton({ onClick, className, children, delay = 2000 }: AutoProgressButtonProps) {
   const onClickRef = useRef(onClick);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const firedRef = useRef(false);

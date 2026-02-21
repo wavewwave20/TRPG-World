@@ -3,6 +3,8 @@ import { useSocketStore } from './stores/socketStore';
 import { useChatStore } from './stores/chatStore';
 import { useGameStore } from './stores/gameStore';
 import { useAuthStore } from './stores/authStore';
+import { useActionStore } from './stores/actionStore';
+import { useActStore } from './stores/actStore';
 import GameLayout from './components/GameLayout';
 import SessionCreationForm from './components/SessionCreationForm';
 import SessionList from './components/SessionList';
@@ -19,6 +21,36 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 interface Character extends BaseCharacter {
   user_id: number;
   created_at: string;
+}
+
+function MobileGrowthHistoryMenu({ onClose }: { onClose: () => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const growthHistory = useActStore((s) => s.growthHistory);
+  const showHistoryRewards = useActStore((s) => s.showHistoryRewards);
+
+  if (growthHistory.length === 0) return null;
+
+  return (
+    <>
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full text-left px-2 py-2 text-xs rounded hover:bg-slate-50 text-amber-700 font-semibold"
+      >
+        성장 기록 {expanded ? '▲' : '▼'}
+      </button>
+      {expanded && growthHistory.map((entry) => (
+        <button
+          key={entry.actId}
+          onClick={() => { showHistoryRewards(entry.actId); onClose(); }}
+          className="w-full text-left pl-4 pr-2 py-1.5 text-[11px] rounded hover:bg-amber-50"
+        >
+          <span className="font-bold text-slate-700">{entry.actNumber}막 — {entry.actTitle}</span>
+          <span className="text-slate-400 ml-1">({entry.rewards.length})</span>
+        </button>
+      ))}
+      <hr className="my-1 border-slate-200" />
+    </>
+  );
 }
 
 function App() {
@@ -39,10 +71,29 @@ function App() {
   const isAdmin = useAuthStore((state) => state.isAdmin);
   const checkAdmin = useAuthStore((state) => state.checkAdmin);
 
+  const queueCount = useActionStore((state) => state.queueCount);
+  const socket = useSocketStore((state) => state.socket);
+
   const [selectedCharacter, setSelectedCharacter] = useState<Character | null>(null);
   const [showLLMSettings, setShowLLMSettings] = useState(false);
   const [showMobileHeaderMenu, setShowMobileHeaderMenu] = useState(false);
+  const [isSteeringEnabled, setIsSteeringEnabled] = useState(false);
   const showLobby = !currentSession;
+
+  // Track steering enabled state from socket events
+  useEffect(() => {
+    if (!socket || !currentSession) { setIsSteeringEnabled(false); return; }
+    const checkEnabled = (data: { session_id: number; instruction?: string; controls?: any }) => {
+      if (data.session_id !== currentSession.id) return;
+      const c = data.controls || {};
+      setIsSteeringEnabled(
+        !!(data.instruction || '').trim() || !!c.end_crisis || !!c.focus_main_goal || !!c.limit_consecutive_crisis || (c.pace === 'up' || c.pace === 'down')
+      );
+    };
+    socket.on('story_instruction_data', checkEnabled);
+    socket.on('story_instruction_updated', checkEnabled);
+    return () => { socket.off('story_instruction_data', checkEnabled); socket.off('story_instruction_updated', checkEnabled); };
+  }, [socket, currentSession]);
 
   useEffect(() => {
     // Initialize socket connection on mount if authenticated
@@ -118,7 +169,7 @@ function App() {
   }
 
   return (
-    <div className="h-screen w-screen bg-slate-50 text-slate-700 font-sans selection:bg-primary-100 selection:text-primary-900 overflow-hidden flex flex-col">
+    <div className="h-dvh w-screen bg-slate-50 text-slate-700 font-sans selection:bg-primary-100 selection:text-primary-900 overflow-hidden flex flex-col">
       
       {/* Navbar / Header Area - Application Shell */}
       <header className="flex-none relative w-full h-14 sm:h-16 bg-white border-b border-slate-200 z-50 shadow-sm">
@@ -162,9 +213,12 @@ function App() {
               <div className="sm:hidden relative">
                 <button
                   onClick={() => setShowMobileHeaderMenu((v) => !v)}
-                  className="w-9 h-9 rounded-lg border border-slate-200 bg-white text-slate-700"
+                  className="relative w-9 h-9 rounded-lg border border-slate-200 bg-white text-slate-700"
                 >
                   ☰
+                  {isHost && (queueCount > 0 || isSteeringEnabled) && (
+                    <span className="absolute -top-1.5 -right-1.5 bg-red-500 rounded-full h-3 w-3 border border-white" />
+                  )}
                 </button>
                 {showMobileHeaderMenu && (
                   <div className="absolute right-0 top-full mt-2 w-44 rounded-lg border border-slate-200 bg-white shadow-lg p-2 z-50">
@@ -175,18 +229,28 @@ function App() {
                             window.dispatchEvent(new Event('oc:open_moderation_modal'));
                             setShowMobileHeaderMenu(false);
                           }}
-                          className="w-full text-left px-2 py-2 text-xs rounded hover:bg-slate-50"
+                          className="relative w-full text-left px-2 py-2 text-xs rounded hover:bg-slate-50"
                         >
                           행동 결정
+                          {queueCount > 0 && (
+                            <span className="absolute top-1.5 right-1.5 bg-red-500 text-white text-[9px] font-bold rounded-full h-4 w-4 flex items-center justify-center">
+                              {queueCount}
+                            </span>
+                          )}
                         </button>
                         <button
                           onClick={() => {
                             window.dispatchEvent(new Event('oc:open_story_steering_modal'));
                             setShowMobileHeaderMenu(false);
                           }}
-                          className="w-full text-left px-2 py-2 text-xs rounded hover:bg-slate-50"
+                          className="relative w-full text-left px-2 py-2 text-xs rounded hover:bg-slate-50"
                         >
                           스토리 조정
+                          {isSteeringEnabled && (
+                            <span className="absolute top-1.5 right-1.5 bg-violet-600 text-white text-[9px] font-bold rounded-full h-4 px-1 flex items-center justify-center">
+                              ON
+                            </span>
+                          )}
                         </button>
                         <button
                           onClick={() => {
@@ -199,6 +263,9 @@ function App() {
                         </button>
                         <hr className="my-1 border-slate-200" />
                       </>
+                    )}
+                    {useActStore.getState().growthHistory.length > 0 && (
+                      <MobileGrowthHistoryMenu onClose={() => setShowMobileHeaderMenu(false)} />
                     )}
                     {isHost && (
                       <button onClick={() => { handleEndSession(); setShowMobileHeaderMenu(false); }} className="w-full text-left px-2 py-2 text-xs rounded hover:bg-slate-50 text-red-600">
