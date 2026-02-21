@@ -61,12 +61,55 @@ if sys.stderr.encoding != "utf-8":
 logger = logging.getLogger(__name__)
 
 
+def _normalize_langsmith_env() -> None:
+    """LangSmith/LangChain tracing 환경변수를 호환되게 정규화합니다."""
+    tracing = os.getenv("LANGSMITH_TRACING", "false").strip().lower()
+    tracing_enabled = tracing in {"1", "true", "yes", "on"}
+
+    # 최신/레거시 키 모두 세팅해서 누락 방지
+    os.environ["LANGSMITH_TRACING"] = "true" if tracing_enabled else "false"
+    os.environ["LANGCHAIN_TRACING_V2"] = "true" if tracing_enabled else "false"
+
+    if os.getenv("LANGSMITH_API_KEY") and not os.getenv("LANGCHAIN_API_KEY"):
+        os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGSMITH_API_KEY", "")
+
+    if os.getenv("LANGSMITH_ENDPOINT") and not os.getenv("LANGCHAIN_ENDPOINT"):
+        os.environ["LANGCHAIN_ENDPOINT"] = os.getenv("LANGSMITH_ENDPOINT", "")
+
+    if os.getenv("LANGSMITH_PROJECT") and not os.getenv("LANGCHAIN_PROJECT"):
+        os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGSMITH_PROJECT", "")
+
+    # LiteLLM direct-call 경로도 LangSmith로 보낼 수 있게 설정
+    # (LangChain 경로는 위 env만으로 추적됨)
+    if tracing_enabled:
+        try:
+            existing_success = list(getattr(litellm, "success_callback", []) or [])
+            if "langsmith" not in existing_success:
+                existing_success.append("langsmith")
+                litellm.success_callback = existing_success
+
+            existing_failure = list(getattr(litellm, "failure_callback", []) or [])
+            if "langsmith" not in existing_failure:
+                existing_failure.append("langsmith")
+                litellm.failure_callback = existing_failure
+        except Exception as e:
+            logger.warning(f"LiteLLM LangSmith callback 설정 실패: {e}")
+
+    logger.info(
+        "LangSmith tracing normalized: "
+        f"enabled={tracing_enabled}, project={os.getenv('LANGSMITH_PROJECT','') or os.getenv('LANGCHAIN_PROJECT','')}"
+    )
+
+
 def run_startup_migrations() -> None:
     """Apply pending Alembic migrations before serving requests."""
     project_root = Path(__file__).resolve().parents[1]
     alembic_cfg = Config(str(project_root / "alembic.ini"))
     command.upgrade(alembic_cfg, "head")
 
+
+# Tracing env normalization (LangSmith/LangChain/LiteLLM)
+_normalize_langsmith_env()
 
 # Validate AI GM configuration at startup
 try:

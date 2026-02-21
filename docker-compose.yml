@@ -17,6 +17,11 @@ services:
       - LANGSMITH_ENDPOINT=${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
       - LANGSMITH_API_KEY=${LANGSMITH_API_KEY}
       - LANGSMITH_PROJECT=${LANGSMITH_PROJECT:-trpg-world}
+      # LangChain compatibility aliases for tracing
+      - LANGCHAIN_TRACING_V2=${LANGSMITH_TRACING:-false}
+      - LANGCHAIN_ENDPOINT=${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
+      - LANGCHAIN_API_KEY=${LANGSMITH_API_KEY}
+      - LANGCHAIN_PROJECT=${LANGSMITH_PROJECT:-trpg-world}
       - LLM_MODEL=${LLM_MODEL:-gpt-4o}
       - SYSTEM_PROMPT_PATH=app/prompts/system_prompt.md
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
