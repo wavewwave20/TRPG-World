@@ -191,10 +191,21 @@ async def _check_act_transition_after_narrative(session_id, db, room_name, sio):
 
         from app.services.ai_gm_service_v2 import AIGMServiceV2
 
+        await sio.emit(
+            "act_transition_started",
+            {"session_id": session_id},
+            room=room_name,
+        )
+
         ai_service = AIGMServiceV2(db=db, llm_model=llm_model)
         result = await ai_service.check_act_transition(session_id)
 
         if result is None:
+            await sio.emit(
+                "act_transition_cancelled",
+                {"session_id": session_id},
+                room=room_name,
+            )
             return
 
         # 막 전환 결과 브로드캐스트
@@ -259,6 +270,12 @@ async def _handle_act_transition_from_metadata(session_id, metadata, db, room_na
 
         from app.services.ai_gm_service_v2 import AIGMServiceV2
 
+        await sio.emit(
+            "act_transition_started",
+            {"session_id": session_id},
+            room=room_name,
+        )
+
         ai_service = AIGMServiceV2(db=db, llm_model=llm_model)
         result = await ai_service.execute_act_transition(
             session_id=session_id,
@@ -268,6 +285,11 @@ async def _handle_act_transition_from_metadata(session_id, metadata, db, room_na
 
         if result is None:
             logger.info(f"세션 {session_id}: 막 전환 거부됨 (코드 가드)")
+            await sio.emit(
+                "act_transition_cancelled",
+                {"session_id": session_id},
+                room=room_name,
+            )
             return
 
         # 막 전환 결과 브로드캐스트
@@ -432,6 +454,35 @@ def register_handlers(sio):
     인자:
         sio: Socket.io 서버 인스턴스
     """
+
+    @sio.event
+    async def act_transition_display_start(sid, data):
+        """호스트가 다음 막 진행 연출 모달 시작 신호를 보냅니다."""
+        session_id = data.get("session_id")
+        if not session_id:
+            await sio.emit("error", {"message": "session_id가 필요합니다"}, to=sid)
+            return
+
+        db = SessionLocal()
+        try:
+            session = db.query(GameSession).filter(GameSession.id == session_id).first()
+            if not session:
+                await sio.emit("error", {"message": "세션을 찾을 수 없습니다"}, to=sid)
+                return
+
+            presence = session_presence.get(sid)
+            if not presence or presence.get("session_id") != session_id:
+                await sio.emit("error", {"message": "세션 참가 상태가 아닙니다"}, to=sid)
+                return
+
+            if presence.get("user_id") != session.host_user_id:
+                await sio.emit("error", {"message": "호스트만 전환 연출을 시작할 수 있습니다"}, to=sid)
+                return
+
+            room_name = f"session_{session_id}"
+            await sio.emit("act_transition_display_start", {"session_id": session_id}, room=room_name)
+        finally:
+            db.close()
 
     @sio.event
     async def submit_player_action(sid, data):

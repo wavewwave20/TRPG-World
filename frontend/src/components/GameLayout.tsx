@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import LeftPane from './LeftPane';
 import CenterPane from './CenterPane';
 import RightPane from './RightPane';
 import JudgmentModal from './JudgmentModal';
 import GrowthRewardModal from './GrowthRewardModal';
 import { useGameStore } from '../stores/gameStore';
+import { useActStore } from '../stores/actStore';
 import { useAuthStore } from '../stores/authStore';
 import { useSocketStore } from '../stores/socketStore';
 import { useChatStore } from '../stores/chatStore';
@@ -24,8 +25,32 @@ export default function GameLayout() {
   const clearJudgments = useAIStore((state) => state.clearJudgments);
   const judgments = useAIStore((state) => state.judgments);
   const isGenerating = useAIStore((state) => state.isGenerating);
+  const isTransitioning = useActStore((state) => state.isTransitioning);
+  const transitionCompletedTitle = useActStore((state) => state.transitionCompletedTitle);
   const isHost = !!currentSession && currentSession.hostUserId === userId;
   const narrativeRequestInFlightRef = useRef(false);
+
+  const loadingLines = useMemo(
+    () => [
+      'NPC들이 대사를 외우는 중...',
+      '새로운 함정을 설치하는 중... 잠시만요, 이건 못 본 걸로',
+      '몬스터들이 출근 도장을 찍는 중...',
+      '다이스 신이 다음 저주를 준비하는 중...',
+      '경험치 정산 중... 세금 떼는 중...',
+      '시체 담당 스태프가 전투 현장 정리하는 중...',
+      '복선 회수팀이 출동하는 중...',
+      '여관 주인이 오늘도 떡밥을 흘릴 준비를 하는 중...',
+      '다음 동료 NPC가 비극적 과거사를 리허설하는 중...',
+      '파티의 흑역사가 바드의 노래에 추가되는 중...',
+      '방금 죽은 잡몹의 가족에게 통보하는 중...',
+      '길 위의 수상한 노인이 대본 넘기는 중...',
+      'NPC 조합에서 위험수당 협상하는 중...',
+      '다음 맵 로딩 중... 벽 뒤에 아이템 숨기는 중...',
+      '조명팀이 다음 장소 분위기 맞추는 중...',
+    ],
+    []
+  );
+  const [loadingLine, setLoadingLine] = useState(loadingLines[0]);
 
   // Reset per session so each round can request a new narrative stream.
   useEffect(() => {
@@ -163,6 +188,22 @@ export default function GameLayout() {
     setJudgmentModalOpen(false);
   };
 
+  useEffect(() => {
+    if (!isTransitioning || transitionCompletedTitle) return;
+
+    let pool = [...loadingLines];
+    const pick = () => {
+      if (pool.length === 0) pool = [...loadingLines];
+      const idx = Math.floor(Math.random() * pool.length);
+      const [line] = pool.splice(idx, 1);
+      setLoadingLine(line);
+    };
+
+    pick();
+    const timer = setInterval(pick, 1400);
+    return () => clearInterval(timer);
+  }, [isTransitioning, transitionCompletedTitle, loadingLines]);
+
   return (
     <>
       {/* Desktop: 3-column grid (unchanged) */}
@@ -242,6 +283,29 @@ export default function GameLayout() {
           </button>
         </nav>
       </div>
+
+      {isTransitioning && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/65 backdrop-blur-sm transition-opacity duration-500" />
+          <div className="relative mx-4 w-full max-w-lg rounded-2xl border border-white/20 bg-slate-900/90 text-white shadow-2xl p-6 text-center transition-all duration-700 ease-out">
+            {!transitionCompletedTitle ? (
+              <div className="transition-opacity duration-500 opacity-100">
+                <div className="text-xs uppercase tracking-[0.2em] text-amber-300 mb-2">Act Transition</div>
+                <div className="text-lg font-bold mb-3">현재 막을 정리하고 다음 막을 준비 중...</div>
+                <div className="h-1.5 w-full bg-white/10 rounded-full overflow-hidden mb-4">
+                  <div className="h-full w-1/3 bg-amber-400 animate-pulse" />
+                </div>
+                <div className="text-sm text-slate-200 transition-all duration-500">{loadingLine}</div>
+              </div>
+            ) : (
+              <div className="transition-all duration-700 opacity-100 scale-100">
+                <div className="text-xs uppercase tracking-[0.2em] text-emerald-300 mb-2">Act Ready</div>
+                <div className="text-2xl sm:text-3xl font-extrabold tracking-tight animate-pulse">{transitionCompletedTitle}</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Judgment Modal */}
       <JudgmentModal

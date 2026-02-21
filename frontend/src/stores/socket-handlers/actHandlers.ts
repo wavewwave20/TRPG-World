@@ -1,10 +1,60 @@
 import type { Socket } from 'socket.io-client';
 import type { StoryActInfo, GrowthReward } from '../../types/act';
 import { useGameStore } from '../gameStore';
+import { useAuthStore } from '../authStore';
 import { useActStore } from '../actStore';
-import { getGrowthHistory } from '../../services/api';
+import { getCharacter, getGrowthHistory } from '../../services/api';
 
 export function registerActHandlers(socket: Socket) {
+  socket.on('act_transition_started', (data: {
+    session_id: number;
+    completed_act?: { act_number: number; title: string };
+  }) => {
+    console.log('Act transition started:', data);
+
+    const gameState = useGameStore.getState();
+    const userId = useAuthStore.getState().userId;
+    const hostUserId = gameState.currentSession?.hostUserId;
+    const isHost: boolean | null = (userId != null && hostUserId != null) ? hostUserId === userId : null;
+
+    if (isHost === false) {
+      // 참가자는 호스트 전용 대기 버튼 상태를 만들지 않음
+      return;
+    }
+
+    const actState = useActStore.getState();
+    const currentAct = actState.currentAct;
+
+    // 버튼을 즉시 노출하기 위한 placeholder pending transition
+    if (!actState.pendingTransition && currentAct) {
+      actState.setPendingTransition({
+        newAct: {
+          id: -1,
+          actNumber: currentAct.actNumber + 1,
+          title: '다음 막',
+          subtitle: null,
+          startedAt: new Date().toISOString(),
+        },
+        rewards: [],
+      });
+    }
+
+    actState.setTransitionCompletedTitle(null);
+    if (!actState.isTransitioning) {
+      actState.setTransitioning(false);
+    }
+  });
+
+  socket.on('act_transition_cancelled', () => {
+    useActStore.getState().setTransitionCompletedTitle(null);
+    useActStore.getState().setTransitioning(false);
+  });
+
+  socket.on('act_transition_display_start', (data: { session_id: number }) => {
+    console.log('Act transition display start:', data);
+    useActStore.getState().runPendingTransition();
+  });
+
   // New act started (game start or act transition)
   socket.on('act_started', (data: {
     session_id: number;
@@ -58,15 +108,16 @@ export function registerActHandlers(socket: Socket) {
       narrativeReason: r.narrative_reason,
     }));
 
-    useActStore.getState().setCurrentAct(newAct);
-    useActStore.getState().setGrowthRewards(rewards);
-    if (rewards.length > 0) {
-      useActStore.getState().setShowGrowthModal(true);
-    }
+    const actState = useActStore.getState();
+    // 모든 플레이어가 동일한 pending 전환 상태를 보유.
+    // 실제 모달/적용 시작은 호스트 버튼 -> 브로드캐스트 이벤트로 동기화.
+    actState.setTransitioning(false);
+    actState.setTransitionCompletedTitle(null);
+    actState.setPendingTransition({ newAct, rewards });
 
     useGameStore.getState().addNotification({
       type: 'system',
-      message: `${data.completed_act.act_number}막 완료! ${newAct.actNumber}막 — ${newAct.title} 시작`,
+      message: `${data.completed_act.act_number}막 완료. ${newAct.actNumber}막 준비됨 (호스트 전환 버튼 대기)`,
     });
 
     // 성장 기록 갱신
@@ -76,7 +127,7 @@ export function registerActHandlers(socket: Socket) {
   });
 
   // Character growth applied (per character notification)
-  socket.on('character_growth_applied', (data: {
+  socket.on('character_growth_applied', async (data: {
     session_id: number;
     character_id: number;
     growth: {
@@ -86,11 +137,40 @@ export function registerActHandlers(socket: Socket) {
     };
   }) => {
     console.log('Character growth applied:', data);
-    const currentCharacter = useGameStore.getState().currentCharacter;
-    if (currentCharacter && currentCharacter.id === data.character_id) {
-      window.dispatchEvent(new CustomEvent('character_data_updated', {
-        detail: { character_id: data.character_id },
-      }));
+
+    const gameState = useGameStore.getState();
+    const currentCharacter = gameState.currentCharacter;
+    const selectedParticipant = gameState.selectedParticipant;
+
+    const shouldRefreshCurrent = !!currentCharacter && currentCharacter.id === data.character_id;
+    const shouldRefreshSelected = !!selectedParticipant?.character && selectedParticipant.character.id === data.character_id;
+
+    if (!shouldRefreshCurrent && !shouldRefreshSelected) {
+      return;
+    }
+
+    try {
+      const refreshed = await getCharacter(data.character_id);
+
+      if (shouldRefreshCurrent) {
+        useGameStore.getState().setCharacter(refreshed);
+      }
+
+      if (shouldRefreshSelected && selectedParticipant) {
+        useGameStore.getState().setSelectedParticipant({
+          ...selectedParticipant,
+          character: refreshed,
+        });
+      }
+
+      // participants 캐시에도 반영
+      const participants = useGameStore.getState().participants;
+      const nextParticipants = participants.map((p) =>
+        p.character_id === data.character_id ? { ...p, character: refreshed } : p
+      );
+      useGameStore.getState().setParticipants(nextParticipants);
+    } catch (err) {
+      console.error('Failed to refresh character after growth:', err);
     }
   });
 }
