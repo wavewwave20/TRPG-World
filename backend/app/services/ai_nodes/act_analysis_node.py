@@ -324,12 +324,31 @@ def _parse_growth_rewards(
             logger.warning(f"잘못된 growth_type: {growth_type}, 스킵")
             continue
 
+        growth_detail = item.get("growth_detail", {})
+
+        # 정책: Act 보상의 new_skill은 액티브만 허용
+        if growth_type == "new_skill":
+            skill = growth_detail.get("skill", {}) if isinstance(growth_detail, dict) else {}
+            if not isinstance(skill, dict):
+                skill = {}
+
+            skill_type = str(skill.get("type", "active")).strip().lower() or "active"
+            if skill_type != "active":
+                logger.warning(
+                    f"캐릭터 {char_id}: new_skill 보상에 passive 감지 -> active로 강제 변환"
+                )
+                skill_type = "active"
+
+            skill["type"] = "active"
+            skill.setdefault("cooldown_actions", 3)
+            growth_detail = {"skill": skill}
+
         rewards.append(
             GrowthReward(
                 character_id=char_id,
                 character_name=item.get("character_name", ""),
                 growth_type=growth_type,
-                growth_detail=item.get("growth_detail", {}),
+                growth_detail=growth_detail,
                 narrative_reason=item.get("narrative_reason", ""),
             )
         )

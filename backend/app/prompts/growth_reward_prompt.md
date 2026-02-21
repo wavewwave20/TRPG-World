@@ -34,6 +34,8 @@
 ### 3. 새 스킬 습득 (선택, 캐릭터당 0~1개)
 - 스토리에서 반복적으로 특정 행동을 했거나, 극적인 경험을 한 캐릭터에게 부여
 - 자연스러운 경우에만 부여하고, 억지로 부여하지 마세요
+- **중요: 새 스킬은 반드시 액티브(active)만 허용됩니다. 패시브(passive)는 절대 생성하지 마세요.**
+- 새 스킬에는 `cooldown_actions`(기본 3) 값을 포함하세요
 
 ### 4. 약점 완화 (선택)
 - 약점과 관련된 상황을 겪고 극복한 캐릭터에게 부여
@@ -48,8 +50,8 @@
 - 이미 20인 능력치는 선택하지 마세요
 
 ### `new_skill` — 새 스킬 습득
-- 경험을 통해 자연스럽게 배운 스킬
-- `growth_detail`: `{"skill": {"type": "passive", "name": "함정 감지", "description": "함정의 존재를 본능적으로 감지한다", "ability": "wisdom"}}`
+- 경험을 통해 자연스럽게 배운 스킬 (액티브만 허용)
+- `growth_detail`: `{"skill": {"type": "active", "name": "함정 감지", "description": "짧은 집중 후 주변의 함정 단서를 포착한다", "ability": "wisdom", "cooldown_actions": 3}}`
 - 기존 스킬과 중복되지 않게 하세요
 
 ### `weakness_mitigated` — 약점 완화
@@ -74,8 +76,8 @@
     "character_id": 1,
     "character_name": "카엘",
     "growth_type": "new_skill",
-    "growth_detail": {"skill": {"type": "passive", "name": "전장의 감각", "description": "전투 경험으로 적의 약점을 본능적으로 간파한다", "ability": "wisdom"}},
-    "narrative_reason": "끊임없는 전투 속에서 카엘은 적의 움직임을 읽는 감각을 키웠다."
+    "growth_detail": {"skill": {"type": "active", "name": "전장의 감각", "description": "짧게 집중해 적의 빈틈을 읽고 다음 행동에 우위를 만든다", "ability": "wisdom", "cooldown_actions": 3}},
+    "narrative_reason": "끊임없는 전투 속에서 카엘은 위기의 순간 적의 빈틈을 빠르게 읽어내는 기술을 익혔다."
   },
   {
     "character_id": 2,
