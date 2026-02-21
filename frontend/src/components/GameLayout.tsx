@@ -291,16 +291,22 @@ export default function GameLayout() {
             {!transitionCompletedTitle ? (
               <div className="transition-opacity duration-500 opacity-100">
                 <div className="text-xs uppercase tracking-[0.2em] text-amber-300 mb-2">Act Transition</div>
-                <div className="text-lg font-bold mb-3">현재 막을 정리하고 다음 막을 준비 중...</div>
-                <div className="h-1.5 w-full bg-white/10 rounded-full overflow-hidden mb-4">
-                  <div className="h-full w-1/3 bg-amber-400 animate-pulse" />
-                </div>
+                <div className="text-lg font-bold mb-3">다음 막을 준비하고 있습니다</div>
                 <div className="text-sm text-slate-200 transition-all duration-500">{loadingLine}</div>
               </div>
             ) : (
               <div className="transition-all duration-700 opacity-100 scale-100">
-                <div className="text-xs uppercase tracking-[0.2em] text-emerald-300 mb-2">Act Ready</div>
-                <div className="text-2xl sm:text-3xl font-extrabold tracking-tight animate-pulse">{transitionCompletedTitle}</div>
+                <div className="text-xs uppercase tracking-[0.2em] text-emerald-300 mb-3">Act Ready</div>
+                {(() => {
+                  const lines = transitionCompletedTitle.split('\n');
+                  return (
+                    <>
+                      <div className="text-lg sm:text-xl font-bold text-amber-300 mb-1">{lines[0]}</div>
+                      {lines[1] && <div className="text-2xl sm:text-3xl font-extrabold tracking-tight">{lines[1]}</div>}
+                      {lines[2] && <div className="text-base sm:text-lg font-semibold text-slate-300 mt-1">{lines[2]}</div>}
+                    </>
+                  );
+                })()}
               </div>
             )}
           </div>

@@ -43,31 +43,49 @@ export const useActStore = create<ActStore>((set, get) => ({
   setTransitionCompletedTitle: (title) => set({ transitionCompletedTitle: title }),
   setPendingTransition: (transition) => set({ pendingTransition: transition }),
   runPendingTransition: () => {
-    const pending = get().pendingTransition;
-    if (!pending) return;
+    if (get().isTransitioning) return; // 중복 실행 방지
 
-    const title = `${pending.newAct.actNumber}막 · ${pending.newAct.title}${pending.newAct.subtitle ? ` ${pending.newAct.subtitle}` : ''}`;
-    set({
-      isTransitioning: true,
-      transitionCompletedTitle: null,
-    });
+    set({ isTransitioning: true, transitionCompletedTitle: null });
 
-    // 로딩 연출 후 타이틀 표시
-    setTimeout(() => {
+    const startedAt = Date.now();
+
+    const revealTitle = () => {
+      const data = get().pendingTransition;
+      if (!data) return;
+      const title = `${data.newAct.actNumber}막\n${data.newAct.title}${data.newAct.subtitle ? `\n${data.newAct.subtitle}` : ''}`;
       set({ transitionCompletedTitle: title });
-    }, 2200);
 
-    // 타이틀 표시 후 적용/종료
-    setTimeout(() => {
-      set({
-        currentAct: pending.newAct,
-        growthRewards: pending.rewards,
-        showGrowthModal: pending.rewards.length > 0,
-        pendingTransition: null,
-        isTransitioning: false,
-        transitionCompletedTitle: null,
-      });
-    }, 4700);
+      // 타이틀 표시 후 적용/종료
+      setTimeout(() => {
+        const final = get().pendingTransition || data;
+        set({
+          currentAct: final.newAct,
+          growthRewards: final.rewards,
+          showGrowthModal: final.rewards.length > 0,
+          pendingTransition: null,
+          isTransitioning: false,
+          transitionCompletedTitle: null,
+        });
+      }, 2500);
+    };
+
+    // 데이터(act_completed) 도착 대기 + 최소 2200ms 로딩 보장
+    const waitForData = () => {
+      const pending = get().pendingTransition;
+      if (pending && pending.newAct.id !== -1) {
+        const remaining = Math.max(0, 2200 - (Date.now() - startedAt));
+        setTimeout(revealTitle, remaining);
+        return;
+      }
+      // 60초 타임아웃
+      if (Date.now() - startedAt > 60_000) {
+        set({ isTransitioning: false, transitionCompletedTitle: null });
+        return;
+      }
+      setTimeout(waitForData, 200);
+    };
+
+    waitForData();
   },
   setGrowthRewards: (rewards) => set({ growthRewards: rewards }),
   setShowGrowthModal: (show) => set(show ? {} : { showGrowthModal: false, selectedHistoryActId: null }),

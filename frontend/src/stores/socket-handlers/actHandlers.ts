@@ -111,8 +111,10 @@ export function registerActHandlers(socket: Socket) {
     const actState = useActStore.getState();
     // 모든 플레이어가 동일한 pending 전환 상태를 보유.
     // 실제 모달/적용 시작은 호스트 버튼 -> 브로드캐스트 이벤트로 동기화.
-    actState.setTransitioning(false);
-    actState.setTransitionCompletedTitle(null);
+    // 이미 전환 모달이 진행 중이면 리셋하지 않음 (호스트가 먼저 클릭한 경우)
+    if (!actState.isTransitioning) {
+      actState.setTransitionCompletedTitle(null);
+    }
     actState.setPendingTransition({ newAct, rewards });
 
     useGameStore.getState().addNotification({

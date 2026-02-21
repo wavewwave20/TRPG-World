@@ -793,7 +793,8 @@ export default function CenterPane() {
           <button
             onClick={() => {
               if (!currentSession) return;
-              emit('act_transition_display_start', { session_id: currentSession.id });
+              useActStore.getState().runPendingTransition(); // 모달 표시 (데이터 미도착이면 로딩 대기)
+              emit('act_transition_display_start', { session_id: currentSession.id }); // 다른 플레이어에게 브로드캐스트
             }}
             className="w-full rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900 px-4 py-3 text-sm sm:text-base font-extrabold shadow-sm transition-all"
           >
