@@ -3,7 +3,7 @@
 @import "tailwindcss";
 
 :root {
-  font-family: 'Inter', system-ui, sans-serif;
+  font-family: 'Inter', 'Noto Sans KR', 'Noto Color Emoji', 'Apple Color Emoji', 'Segoe UI Emoji', system-ui, sans-serif;
   line-height: 1.5;
   font-weight: 400;
   color-scheme: light;

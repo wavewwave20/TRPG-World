@@ -26,6 +26,9 @@ RUN npm run build
 # Production stage - serve with nginx
 FROM nginx:alpine
 
+# Emoji font for proper color emoji rendering in browser/screenshot environments
+RUN apk add --no-cache font-noto-emoji
+
 # Copy built files
 COPY --from=builder /app/dist /usr/share/nginx/html
 
