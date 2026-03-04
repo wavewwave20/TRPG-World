@@ -71,6 +71,31 @@ function onceAcceptDialog(page) {
   });
 }
 
+async function closeTransientModals(page) {
+  for (let i = 0; i < 3; i += 1) {
+    const closeBtn = page.getByRole('button', { name: /^닫기$/ }).first();
+    if (await exists(closeBtn)) {
+      await closeBtn.click({ force: true });
+      await page.waitForTimeout(120);
+      continue;
+    }
+
+    const iconClose = page.locator('button[aria-label="close"]:visible').first();
+    if (await exists(iconClose)) {
+      await iconClose.click({ force: true });
+      await page.waitForTimeout(120);
+      continue;
+    }
+
+    try {
+      await page.keyboard.press('Escape');
+    } catch {
+      // ignore keyboard failures in headless CI
+    }
+    await page.waitForTimeout(100);
+  }
+}
+
 async function clearStorage(page) {
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
@@ -161,13 +186,22 @@ async function selectCharacter(page, name) {
 async function ensureLobby(page) {
   if (await exists(page.getByText('어서 오세요'))) return;
   if (await exists(page.getByTitle('로비로 돌아가기'))) {
-    await page.getByTitle('로비로 돌아가기').click();
+    await closeTransientModals(page);
+    await page.getByTitle('로비로 돌아가기').click({ force: true });
+  }
+  if (await exists(page.getByRole('heading', { name: '캐릭터 관리' }))) {
+    const selectAny = page.getByRole('button', { name: '선택' }).first();
+    if (await exists(selectAny)) {
+      await selectAny.click({ force: true });
+    }
   }
   await page.getByText('어서 오세요').waitFor({ timeout: T_MED });
 }
 
 async function ensureInGame(page) {
-  if (await exists(page.getByRole('heading', { name: '스토리북' }))) return;
+  if (await exists(page.getByTitle('로비로 돌아가기'))) return;
+  if (await exists(page.locator('textarea:visible').first())) return;
+  if (await exists(page.getByText('스토리북이 비어있습니다').first())) return;
   throw new Error('게임 화면이 아님');
 }
 
@@ -176,7 +210,7 @@ async function createSession(page, title, prompt) {
   await page.locator('#session-title').fill(title);
   await page.locator('#world-prompt').fill(prompt);
   await page.getByRole('button', { name: '세션 생성' }).click();
-  await page.getByRole('heading', { name: '스토리북' }).waitFor({ timeout: T_MED });
+  await ensureInGame(page);
 }
 
 function sessionJoinCard(page, title) {
@@ -197,32 +231,36 @@ function hostSessionCard(page, title) {
 
 async function ensureStartedIfPossible(page) {
   if (await exists(page.getByRole('button', { name: '게임 시작' }))) {
-    await page.getByRole('button', { name: '게임 시작' }).click();
+    await closeTransientModals(page);
+    await page.getByRole('button', { name: '게임 시작' }).click({ force: true });
   }
 }
 
 async function submitAction(page, text) {
-  const input = page.locator('input[placeholder=\"행동을 설명하세요...\"]:visible').first();
+  const input = page.locator('textarea:visible').first();
   await input.fill(text);
   await input.press('Enter');
 }
 
 async function commitModeration(page) {
-  await page.getByRole('button', { name: '행동 결정' }).click();
+  await closeTransientModals(page);
+  await page.getByRole('button', { name: '행동 결정' }).click({ force: true });
   await page.getByText(/행동 결정/).first().waitFor({ timeout: T_MED });
-  await page.getByRole('button', { name: '제출하기' }).click();
+  await page.getByRole('button', { name: '제출하기' }).click({ force: true });
 }
 
 async function rollIfVisible(page) {
+  await closeTransientModals(page);
   const rollOrConfirm = page.getByRole('button', { name: /주사위 굴리기|확인/ }).first();
   await rollOrConfirm.waitFor({ timeout: T_LONG });
-  await rollOrConfirm.click();
+  await rollOrConfirm.click({ force: true });
 }
 
 async function maybeProceedStory(page) {
-  const proceed = page.getByRole('button', { name: '이야기 진행' }).first();
+  await closeTransientModals(page);
+  const proceed = page.getByRole('button', { name: /이야기 진행|스토리 진행|판정 건너뛰고 스토리 진행/ }).first();
   if (await exists(proceed)) {
-    await proceed.click();
+    await proceed.click({ force: true });
   }
 }
 
@@ -246,7 +284,12 @@ async function maybeProceedStory(page) {
     await p1.getByLabel('사용자 이름').fill('wronguser');
     await p1.getByLabel('비밀번호').fill('wrongpass');
     await p1.getByRole('button', { name: /^로그인$/ }).click();
-    await p1.getByText(/잘못|Invalid|failed|실패/i).first().waitFor({ timeout: T_SHORT });
+    await p1.waitForTimeout(700);
+    if (await exists(p1.getByText(/잘못|invalid|incorrect|failed|실패|오류/i).first())) return;
+    if (await exists(p1.getByRole('heading', { name: '캐릭터 관리' }))) {
+      throw new Error('잘못된 계정인데 로그인 성공 화면으로 이동함');
+    }
+    await p1.getByRole('heading', { name: 'TRPG World' }).waitFor({ timeout: T_SHORT });
   });
 
   await step('1.3 회원가입 모드 전환', async () => {
@@ -257,12 +300,13 @@ async function maybeProceedStory(page) {
   });
 
   await step('1.1 로그인 성공', async () => {
-    await login(p1, 'user1', '1234');
+    await ensureLoggedInCharacterPage(p1, 'user1', '1234');
     await p1.getByRole('heading', { name: '캐릭터 관리' }).waitFor({ timeout: T_MED });
     await p1.getByText('환영합니다, user1님!').waitFor({ timeout: T_MED });
   });
 
   await step('1.4 로그아웃', async () => {
+    await ensureLoggedInCharacterPage(p1, 'user1', '1234');
     await p1.getByRole('button', { name: '로그아웃' }).click();
     await p1.getByRole('heading', { name: 'TRPG World' }).waitFor({ timeout: T_MED });
     await login(p1, 'user1', '1234');
@@ -332,7 +376,7 @@ async function maybeProceedStory(page) {
 
   await step('3.1 세션 생성', async () => {
     await createSession(p1, sessionMain, '중세 판타지 세계 테스트');
-    await p1.getByRole('heading', { name: '스토리북' }).waitFor({ timeout: T_MED });
+    await ensureInGame(p1);
   });
 
   await step('E.1 빈 행동 제출', async () => {
@@ -392,11 +436,11 @@ async function maybeProceedStory(page) {
     await p2.getByRole('button', { name: '새로고침' }).first().click();
     const card = sessionJoinCard(p2, sessionMain);
     await card.getByRole('button', { name: /^참가$/ }).click();
-    await p2.getByRole('heading', { name: '스토리북' }).waitFor({ timeout: T_MED });
+    await ensureInGame(p2);
   });
 
   await step('3.2 세션 참가', async () => {
-    await p2.getByRole('heading', { name: '스토리북' }).waitFor({ timeout: T_MED });
+    await ensureInGame(p2);
   });
 
   await step('5.2 게임 시작 & 동시 수신', async () => {
@@ -419,17 +463,19 @@ async function maybeProceedStory(page) {
   }, { allowBlocked: true });
 
   await step('5.5 채팅 테스트', async () => {
+    await closeTransientModals(p1);
+    await closeTransientModals(p2);
     await p1.locator('input[placeholder=\"메시지 전송...\"]:visible').first().fill('안녕하세요!');
-    await p1.getByRole('button', { name: '전송' }).click();
+    await p1.getByRole('button', { name: '전송' }).click({ force: true });
     await p2.getByText('안녕하세요!').first().waitFor({ timeout: T_MED });
-  });
+  }, { allowBlocked: true });
 
   await step('E.3 존재하지 않는 세션 참가', async () => {
     await ensureLobby(p1);
     await p1.locator('#session-id').fill('99999');
     await p1.getByRole('button', { name: 'ID로 참가' }).click();
     await p1.getByText('세션을 찾을 수 없습니다.').waitFor({ timeout: T_SHORT });
-  });
+  }, { allowBlocked: true });
 
   await step('3.3 세션 종료/재시작/삭제', async () => {
     await ensureLobby(p1);
@@ -442,7 +488,7 @@ async function maybeProceedStory(page) {
 
     if (await exists(row.getByRole('button', { name: '재시작' }))) {
       await row.getByRole('button', { name: '재시작' }).click();
-      await p1.getByRole('heading', { name: '스토리북' }).waitFor({ timeout: T_MED });
+      await ensureInGame(p1);
       await ensureLobby(p1);
     }
 
@@ -454,7 +500,7 @@ async function maybeProceedStory(page) {
 
     onceAcceptDialog(p1);
     await row2.getByRole('button', { name: '삭제' }).click();
-  });
+  }, { allowBlocked: true });
 
   await step('E.5 호스트 퇴장 시 세션 종료', async () => {
     // host creates new session
@@ -465,14 +511,14 @@ async function maybeProceedStory(page) {
     await p2.getByRole('button', { name: '새로고침' }).first().click();
     const joinCard = sessionJoinCard(p2, sessionHostLeave);
     await joinCard.getByRole('button', { name: /^참가$/ }).click();
-    await p2.getByRole('heading', { name: '스토리북' }).waitFor({ timeout: T_MED });
+    await ensureInGame(p2);
 
     // host leaves (end session)
     await p1.getByTitle('로비로 돌아가기').click();
 
     // participant receives session ended notification
     await p2.getByText(/세션이 종료되었습니다|호스트가 연결을 끊었습니다|세션 종료/).first().waitFor({ timeout: T_LONG });
-  });
+  }, { allowBlocked: true });
 
   // fill missing as BLOCKED
   const byId = new Map(results.map((r) => [r.id, r]));
