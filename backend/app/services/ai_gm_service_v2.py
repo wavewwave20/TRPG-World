@@ -24,6 +24,7 @@ from app.models import (
     Character,
     CharacterGrowthLog,
     GameSession,
+    SessionParticipant,
     StoryAct,
     StoryFlowMetric,
     StoryLog,
@@ -39,15 +40,16 @@ from app.schemas import (
     PlayerAction,
     StoryActInfo,
 )
+from app.services.act_resolver import resolve_current_open_act
 from app.services.ai_nodes import analyze_and_judge_actions, generate_narrative, generate_narrative_streaming
 from app.services.ai_nodes.narrative_node import parse_narrative_xml
+from app.services.ai_nodes.state_update_node import extract_story_state_updates
 from app.services.background_task_manager import get_task_manager
+from app.services.character_state import normalize_inventory_items, normalize_statuses
 from app.services.context_loader import ContextLoadError, GameContext, load_game_context
 from app.services.dice_system import DiceSystem
-from app.services.session_state_manager import get_session_state_manager
 from app.services.story_director import get_story_director_service
 from app.services.stream_buffer import get_buffer_manager
-from app.services.act_resolver import resolve_current_open_act
 
 logger = logging.getLogger("ai_gm.service_v2")
 
@@ -79,7 +81,7 @@ class AIGMServiceV2:
         )
     """
 
-    def __init__(self, db: Session, llm_model: str = "gpt-4o"):
+    def __init__(self, db: Session, llm_model: str = "gpt-4o", judgment_model: str | None = None):
         """
         AI GM 서비스를 초기화합니다.
 
@@ -88,10 +90,11 @@ class AIGMServiceV2:
             llm_model: 사용할 LLM 모델 (기본값: "gpt-4o")
         """
         self.db = db
-        self.llm_model = llm_model
+        self.story_model = llm_model
+        self.judgment_model = judgment_model or llm_model
         self.dice_system = DiceSystem()
 
-        logger.info(f"AIGMServiceV2 초기화: 모델={llm_model}")
+        logger.info(f"AIGMServiceV2 초기화: story_model={self.story_model}, judgment_model={self.judgment_model}")
 
     async def analyze_actions(self, session_id: int, player_actions: list[PlayerAction]) -> list[ActionAnalysis]:
         """
@@ -143,7 +146,9 @@ class AIGMServiceV2:
             recent_story = game_context.story_history[-6:] if game_context.story_history else []
             current_act_text = ""
             if game_context.current_act:
-                current_act_text = f"현재 막: {game_context.current_act.act_number}막 - {game_context.current_act.title}"
+                current_act_text = (
+                    f"현재 막: {game_context.current_act.act_number}막 - {game_context.current_act.title}"
+                )
                 if game_context.current_act.subtitle:
                     current_act_text += f" ({game_context.current_act.subtitle})"
 
@@ -153,7 +158,7 @@ class AIGMServiceV2:
                 characters=game_context.characters,
                 world_context=current_act_text,
                 story_history=recent_story,
-                llm_model=self.llm_model,
+                llm_model=self.judgment_model,
                 ai_summary=None,
             )
 
@@ -259,7 +264,7 @@ class AIGMServiceV2:
                 characters=game_context.characters,
                 world_context=game_context.world_prompt,
                 story_history=game_context.story_history,
-                llm_model=self.llm_model,
+                llm_model=self.story_model,
                 act_context=act_context,
                 ai_summary=game_context.ai_summary,
                 director_guidance=director_guidance,
@@ -281,6 +286,12 @@ class AIGMServiceV2:
 
             # 데이터베이스에 저장
             saved_story_log = self._save_results(session_id=session_id, judgments=judgments, narrative=narrative)
+            await self._apply_story_state_updates(
+                session_id=session_id,
+                narrative=narrative,
+                judgments=judgments,
+                game_context=game_context,
+            )
             self._log_story_flow_metric(
                 session_id=session_id,
                 source="phase3",
@@ -290,9 +301,6 @@ class AIGMServiceV2:
             )
 
             logger.info("Phase 3 완료: 이야기 DB 저장됨")
-
-            # 상태 효과 회복 체크
-            self._apply_status_recovery(session_id)
 
             # 결과 반환
             result = NarrativeResult(
@@ -462,7 +470,7 @@ class AIGMServiceV2:
             characters=game_context.characters,
             world_context=game_context.world_prompt,
             story_history=game_context.story_history,
-            llm_model=self.llm_model,
+            llm_model=self.story_model,
             act_context=act_context,
             ai_summary=game_context.ai_summary,
             director_guidance=director_guidance,
@@ -756,11 +764,6 @@ class AIGMServiceV2:
                 world_context=game_context.world_prompt,
                 ai_summary=game_context.ai_summary,
             )
-            self._sync_host_instruction_from_session(
-                session_id=session_id,
-                world_context=game_context.world_prompt,
-                ai_summary=game_context.ai_summary,
-            )
             director_service = get_story_director_service()
             director_guidance = director_service.build_guidance(
                 session_id=session_id,
@@ -776,7 +779,7 @@ class AIGMServiceV2:
                 characters=game_context.characters,
                 world_context=game_context.world_prompt,
                 story_history=game_context.story_history,
-                llm_model=self.llm_model,
+                llm_model=self.story_model,
                 act_context=act_context,
                 ai_summary=game_context.ai_summary,
                 event_triggered=event_triggered,
@@ -833,9 +836,7 @@ class AIGMServiceV2:
             logger.error(f"백그라운드 생성 에러: 세션={session_id}, {e}", exc_info=True)
             buffer.mark_error(error_msg)
 
-    async def confirm_dice_roll(
-        self, session_id: int, character_id: int, judgment_id: int | None = None
-    ) -> DiceResult:
+    async def confirm_dice_roll(self, session_id: int, character_id: int, judgment_id: int | None = None) -> DiceResult:
         """
         주사위 확인 - 미리 굴린 주사위 값을 반환합니다.
 
@@ -884,13 +885,11 @@ class AIGMServiceV2:
                 # 중복 클릭/재전송: 이미 처리된 판정이면 그대로 성공 처리
                 elif judgment.phase in (2, 3):
                     logger.info(
-                        "이미 확인된 판정 재요청으로 간주합니다: "
-                        f"judgment={judgment.id}, phase={judgment.phase}"
+                        f"이미 확인된 판정 재요청으로 간주합니다: judgment={judgment.id}, phase={judgment.phase}"
                     )
                 else:
                     raise ValueError(
-                        f"확인 가능한 판정 단계가 아닙니다: "
-                        f"judgment={judgment.id}, phase={judgment.phase}"
+                        f"확인 가능한 판정 단계가 아닙니다: judgment={judgment.id}, phase={judgment.phase}"
                     )
             else:
                 # 레거시 클라이언트 호환: judgment_id 없이 가장 최근 phase=0 판정 확인
@@ -921,9 +920,7 @@ class AIGMServiceV2:
                         .first()
                     )
                     if not judgment:
-                        raise ValueError(
-                            f"사전 굴림된 주사위 없음: 세션={session_id}, 캐릭터={character_id}"
-                        )
+                        raise ValueError(f"사전 굴림된 주사위 없음: 세션={session_id}, 캐릭터={character_id}")
                     logger.info(
                         "phase=0 판정이 없어 최신 확정 판정을 반환합니다: "
                         f"judgment={judgment.id}, phase={judgment.phase}"
@@ -1003,7 +1000,7 @@ class AIGMServiceV2:
         token_count = 0
 
         for i in range(0, len(full_narrative), chunk_size):
-            chunk = full_narrative[i:i + chunk_size]
+            chunk = full_narrative[i : i + chunk_size]
             yield chunk
             token_count += 1
             await asyncio.sleep(0.03)  # 30ms per chunk
@@ -1016,8 +1013,6 @@ class AIGMServiceV2:
         try:
             await self._save_narrative_to_database(session_id, full_narrative, event_triggered=event_triggered)
             logger.info(f"이야기 DB 저장 완료: 세션={session_id}")
-            # 상태 효과 회복 체크
-            self._apply_status_recovery(session_id)
         except Exception as e:
             logger.error(f"이야기 저장 실패: {e}", exc_info=True)
 
@@ -1065,8 +1060,7 @@ class AIGMServiceV2:
             if judgments:
                 char_ids = {j.character_id for j in judgments}
                 char_name_map = {
-                    c.id: c.name
-                    for c in self.db.query(Character).filter(Character.id.in_(char_ids)).all()
+                    c.id: c.name for c in self.db.query(Character).filter(Character.id.in_(char_ids)).all()
                 }
 
                 latest_user_log = (
@@ -1080,9 +1074,7 @@ class AIGMServiceV2:
                         {
                             "id": j.id,
                             "character_id": j.character_id,
-                            "character_name": char_name_map.get(
-                                j.character_id, f"캐릭터 {j.character_id}"
-                            ),
+                            "character_name": char_name_map.get(j.character_id, f"캐릭터 {j.character_id}"),
                             "action_text": j.action_text,
                             "action_type": j.action_type,
                             "dice_result": j.dice_result,
@@ -1123,6 +1115,14 @@ class AIGMServiceV2:
                     )
                 )
 
+            refreshed_context = load_game_context(db=self.db, session_id=session_id, system_prompt="")
+            await self._apply_story_state_updates(
+                session_id=session_id,
+                narrative=narrative,
+                judgments=metric_judgments,
+                game_context=refreshed_context,
+            )
+
             self._log_story_flow_metric(
                 session_id=session_id,
                 source="stream",
@@ -1135,6 +1135,135 @@ class AIGMServiceV2:
             logger.error(f"이야기 DB 저장 실패: {e}", exc_info=True)
             self.db.rollback()
             raise
+
+    async def _apply_story_state_updates(
+        self,
+        *,
+        session_id: int,
+        narrative: str,
+        judgments: list[JudgmentResult],
+        game_context: GameContext,
+    ) -> None:
+        from sqlalchemy.orm.attributes import flag_modified
+
+        updates = await extract_story_state_updates(
+            narrative=narrative,
+            judgments=judgments,
+            characters=game_context.characters,
+            llm_model=self.judgment_model,
+        )
+        if not updates:
+            return
+
+        character_ids = {u.get("character_id") for u in updates if isinstance(u.get("character_id"), int)}
+        if not character_ids:
+            return
+
+        character_map = {
+            character.id: character
+            for character in self.db.query(Character).filter(Character.id.in_(character_ids)).all()
+        }
+        changed_count = 0
+
+        for update in updates:
+            character_id = update.get("character_id")
+            if not isinstance(character_id, int):
+                continue
+
+            character = character_map.get(character_id)
+            if not character:
+                continue
+
+            data = character.data if isinstance(character.data, dict) else {}
+            inventory = normalize_inventory_items(data.get("inventory", []))
+            statuses = normalize_statuses(
+                {
+                    **data,
+                    "inventory": inventory,
+                },
+                include_legacy_status_effects=False,
+            )
+
+            status_changed = False
+            remove_statuses = update.get("remove_statuses", [])
+            if isinstance(remove_statuses, list) and remove_statuses:
+                targets = {str(name).strip().lower() for name in remove_statuses if str(name).strip()}
+                before_len = len(statuses)
+                statuses = [s for s in statuses if str(s.get("name", "")).strip().lower() not in targets]
+                status_changed = status_changed or len(statuses) != before_len
+
+            add_statuses = update.get("add_statuses", [])
+            if isinstance(add_statuses, list):
+                existing_keys = {
+                    (str(s.get("name", "")).strip().lower(), str(s.get("type", "debuff")).strip().lower())
+                    for s in statuses
+                }
+                for raw_status in add_statuses:
+                    if not isinstance(raw_status, dict):
+                        continue
+                    status_name = str(raw_status.get("name") or "").strip()
+                    if not status_name:
+                        continue
+                    status_type = str(raw_status.get("type") or "debuff").strip().lower()
+                    if status_type not in {"buff", "debuff"}:
+                        status_type = "debuff"
+                    modifier_raw = raw_status.get("modifier", 0)
+                    modifier = modifier_raw if isinstance(modifier_raw, int) else 0
+                    key = (status_name.lower(), status_type)
+                    if key in existing_keys:
+                        continue
+                    statuses.append(
+                        {
+                            "name": status_name,
+                            "category": str(raw_status.get("category") or "physical").strip().lower(),
+                            "type": status_type,
+                            "modifier": modifier,
+                            "source": "story_event",
+                        }
+                    )
+                    existing_keys.add(key)
+                    status_changed = True
+
+            inventory_changed = False
+            remove_inventory = update.get("remove_inventory", [])
+            if isinstance(remove_inventory, list):
+                for target_name_raw in remove_inventory:
+                    target_name = str(target_name_raw).strip().lower()
+                    if not target_name:
+                        continue
+                    for idx, item in enumerate(inventory):
+                        item_name = str(item.get("name") or "").strip().lower()
+                        if item_name != target_name:
+                            continue
+                        quantity = int(item.get("quantity", 1))
+                        if str(item.get("type") or "equipment") == "consumable" and quantity > 1:
+                            inventory[idx] = {**item, "quantity": quantity - 1}
+                        else:
+                            inventory.pop(idx)
+                        inventory_changed = True
+                        break
+
+            add_inventory = update.get("add_inventory", [])
+            if isinstance(add_inventory, list) and add_inventory:
+                normalized_to_add = normalize_inventory_items(add_inventory)
+                if normalized_to_add:
+                    inventory.extend(normalized_to_add)
+                    inventory_changed = True
+
+            if not status_changed and not inventory_changed:
+                continue
+
+            data["inventory"] = inventory
+            data["statuses"] = statuses
+            data["status_effects"] = statuses
+
+            character.data = data
+            flag_modified(character, "data")
+            changed_count += 1
+
+        if changed_count > 0:
+            self.db.commit()
+            logger.info(f"스토리 기반 상태/인벤토리 업데이트 적용: session={session_id}, characters={changed_count}")
 
     def _save_results(self, session_id: int, judgments: list[JudgmentResult], narrative: str) -> StoryLog:
         """
@@ -1193,72 +1322,6 @@ class AIGMServiceV2:
             self.db.rollback()
             raise
 
-    def _apply_status_recovery(self, session_id: int) -> None:
-        """
-        페이즈 기반 상태 회복을 적용합니다.
-
-        매 내러티브 완료 후 호출됩니다.
-        3 페이즈마다 모든 캐릭터의 구조화된 상태 효과의 severity를 1 감소시키고,
-        severity가 0이 된 효과는 제거합니다.
-
-        Args:
-            session_id: 게임 세션 ID
-        """
-        state_manager = get_session_state_manager()
-        phase = state_manager.increment_phase(session_id)
-
-        if not state_manager.should_apply_recovery(session_id):
-            logger.debug(f"Phase {phase}: 회복 미적용 (3페이즈마다 적용)")
-            return
-
-        logger.info(f"Phase {phase}: 상태 회복 적용 시작 (세션={session_id})")
-
-        try:
-            # 세션에 속한 캐릭터 조회
-            characters = self.db.query(Character).filter(Character.session_id == session_id).all()
-
-            for char in characters:
-                data = char.data or {}
-                status_effects = data.get("status_effects", [])
-
-                if not status_effects:
-                    continue
-
-                updated_effects = []
-                for effect in status_effects:
-                    if isinstance(effect, dict) and "severity" in effect:
-                        # 구조화된 효과: severity 감소
-                        new_severity = effect["severity"]
-                        if new_severity < 0:
-                            new_severity = min(new_severity + 1, 0)  # 디버프 회복
-                        elif new_severity > 0:
-                            new_severity = max(new_severity - 1, 0)  # 버프 감소
-
-                        if new_severity != 0:
-                            effect["severity"] = new_severity
-                            effect["modifier"] = new_severity  # modifier도 동기화
-                            updated_effects.append(effect)
-                        else:
-                            logger.info(f"캐릭터 {char.id}: 상태 '{effect.get('name', '?')}' 회복 완료")
-                    else:
-                        # 문자열 효과: 유지 (수동 제거만 가능)
-                        updated_effects.append(effect)
-
-                if len(updated_effects) != len(status_effects):
-                    data["status_effects"] = updated_effects
-                    char.data = data
-                    # SQLAlchemy JSON 변경 감지를 위해 flag
-                    from sqlalchemy.orm.attributes import flag_modified
-
-                    flag_modified(char, "data")
-
-            self.db.commit()
-            logger.info(f"Phase {phase}: 상태 회복 적용 완료 (세션={session_id})")
-
-        except Exception as e:
-            logger.error(f"상태 회복 적용 실패: {e}", exc_info=True)
-            self.db.rollback()
-
     async def check_act_transition(self, session_id: int) -> ActTransitionResult | None:
         """서술 완료 후 막 전환을 분석합니다.
 
@@ -1310,20 +1373,16 @@ class AIGMServiceV2:
             current_act=current_act_info,
             story_history=act_story,
             characters=game_context.characters,
-            llm_model=self.llm_model,
+            llm_model=self.judgment_model,
         )
 
         if not analysis.should_transition:
             logger.info(
-                f"세션 {session_id}: 막 전환 불필요 "
-                f"(사건 {analysis.event_count}개, 이유: {analysis.reasoning})"
+                f"세션 {session_id}: 막 전환 불필요 (사건 {analysis.event_count}개, 이유: {analysis.reasoning})"
             )
             return None
 
-        logger.info(
-            f"세션 {session_id}: 막 전환 결정! "
-            f"'{current_act_info.title}' → '{analysis.new_act_title}'"
-        )
+        logger.info(f"세션 {session_id}: 막 전환 결정! '{current_act_info.title}' → '{analysis.new_act_title}'")
 
         # 성장 보상 생성
         growth_rewards = await generate_growth_rewards(
@@ -1331,7 +1390,7 @@ class AIGMServiceV2:
             characters=game_context.characters,
             act_story_entries=act_story,
             act_info=current_act_info,
-            llm_model=self.llm_model,
+            llm_model=self.story_model,
         )
 
         # 성장 보상 적용 + DB 저장
@@ -1348,7 +1407,7 @@ class AIGMServiceV2:
                     completed_act=current_act_info,
                     act_story_entries=act_story,
                     growth_rewards=growth_rewards,
-                    llm_model=self.llm_model,
+                    llm_model=self.judgment_model,
                 )
                 logger.info(f"세션 {session_id}: ai_summary 갱신 완료")
             except Exception as e:
@@ -1436,9 +1495,7 @@ class AIGMServiceV2:
         # 코드 가드: AI 서술 엔트리 2개 이하면 전환 거부
         ai_entries = [e for e in act_story if e.role == "AI"]
         if len(ai_entries) <= 2:
-            logger.warning(
-                f"세션 {session_id}: AI 서술 {len(ai_entries)}개, 전환 거부 (최소 3개 필요)"
-            )
+            logger.warning(f"세션 {session_id}: AI 서술 {len(ai_entries)}개, 전환 거부 (최소 3개 필요)")
             return None
 
         current_act_info = StoryActInfo(
@@ -1449,10 +1506,7 @@ class AIGMServiceV2:
             started_at=current_act_db.started_at.isoformat(),
         )
 
-        logger.info(
-            f"세션 {session_id}: 메타데이터 기반 막 전환! "
-            f"'{current_act_info.title}' → '{new_act_title}'"
-        )
+        logger.info(f"세션 {session_id}: 메타데이터 기반 막 전환! '{current_act_info.title}' → '{new_act_title}'")
 
         # 게임 컨텍스트 로드
         game_context = load_game_context(db=self.db, session_id=session_id, system_prompt="")
@@ -1463,7 +1517,7 @@ class AIGMServiceV2:
             characters=game_context.characters,
             act_story_entries=act_story,
             act_info=current_act_info,
-            llm_model=self.llm_model,
+            llm_model=self.story_model,
         )
 
         # 성장 보상 적용 + DB 저장
@@ -1480,7 +1534,7 @@ class AIGMServiceV2:
                     completed_act=current_act_info,
                     act_story_entries=act_story,
                     growth_rewards=growth_rewards,
-                    llm_model=self.llm_model,
+                    llm_model=self.judgment_model,
                 )
                 logger.info(f"세션 {session_id}: ai_summary 갱신 완료")
             except Exception as e:
@@ -1575,47 +1629,10 @@ class AIGMServiceV2:
                 data["skills"] = skills
             logger.info(f"캐릭터 {character.name}: 새 액티브 스킬 '{skill_data.get('name', '?')}'")
 
-        elif reward.growth_type == "weakness_mitigated":
-            weakness_name = reward.growth_detail.get("weakness", "")
-            mitigation_delta = reward.growth_detail.get("mitigation_delta", 1)
-            weaknesses = data.get("weaknesses", [])
-            updated = False
-
-            def _normalize_weakness_name(v: str) -> str:
-                # "촉촉한 피부: 설명..." 형태에서도 이름만 매칭되도록 정규화
-                base = (v or "").split(":", 1)[0].strip().lower()
-                return base
-
-            target = _normalize_weakness_name(weakness_name)
-
-            for i, w in enumerate(weaknesses):
-                if isinstance(w, str):
-                    w_norm = _normalize_weakness_name(w)
-                    if w_norm == target:
-                        # string → 객체로 변환 (원문 설명은 name에 유지)
-                        weaknesses[i] = {"name": w, "mitigation": mitigation_delta}
-                        updated = True
-                        break
-                elif isinstance(w, dict):
-                    w_name = str(w.get("name", ""))
-                    w_norm = _normalize_weakness_name(w_name)
-                    if w_norm == target:
-                        w["mitigation"] = w.get("mitigation", 0) + mitigation_delta
-                        updated = True
-                        break
-
-            if updated:
-                data["weaknesses"] = weaknesses
-                logger.info(f"캐릭터 {character.name}: 약점 '{weakness_name}' 완화")
-            else:
-                logger.warning(f"캐릭터 {character.name}: 약점 '{weakness_name}' 찾을 수 없음")
-
         character.data = data
         flag_modified(character, "data")
 
-    def _persist_growth_rewards(
-        self, session_id: int, act_id: int, rewards: list[GrowthReward]
-    ) -> None:
+    def _persist_growth_rewards(self, session_id: int, act_id: int, rewards: list[GrowthReward]) -> None:
         """성장 보상을 CharacterGrowthLog에 저장합니다."""
         for reward in rewards:
             self.db.add(

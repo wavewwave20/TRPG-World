@@ -9,8 +9,16 @@ import os
 from datetime import datetime
 
 from app.database import SessionLocal
-from app.models import ActionJudgment, Character, GameSession, StoryLog
-from app.services.llm_config_resolver import get_active_llm_model
+from app.models import (
+    ActionJudgment,
+    Character,
+    CharacterGrowthLog,
+    GameSession,
+    SessionParticipant,
+    StoryAct,
+    StoryLog,
+)
+from app.services.llm_config_resolver import get_active_llm_model, get_active_llm_models
 from app.services.story_director import get_story_director_service
 from app.socket.managers.presence_manager import session_presence
 from app.socket.server import logger
@@ -52,24 +60,29 @@ async def _generate_opening_narrative(session_id, world_prompt, db, room_name, s
     await sio.emit("narrative_stream_started", {"session_id": session_id}, room=room_name)
 
     try:
-        from langchain_litellm import ChatLiteLLM
         from langchain_core.prompts import ChatPromptTemplate
+        from langchain_litellm import ChatLiteLLM
 
         from app.services.ai_nodes.narrative_node import parse_narrative_xml
         from app.utils.prompt_loader import load_prompt
 
-        llm_model = get_active_llm_model()
+        llm_model = get_active_llm_model("story")
 
         # narrative_prompt.md를 시스템 프롬프트로 사용
         system_message = load_prompt("narrative_prompt.md")
 
-        chat_template = ChatPromptTemplate.from_messages([
-            system_message,
-            ("human", "## 세계관\n\n{world_prompt}\n\n"
-                      "위 세계관을 바탕으로 모험의 시작 장면을 서술해주세요. "
-                      "모험가들이 어디에 있고, 무엇을 보고 느끼는지 생생하게 묘사해주세요. "
-                      "3인칭 서술자 시점으로 장면만 묘사하고, 플레이어에게 질문하지 마세요."),
-        ])
+        chat_template = ChatPromptTemplate.from_messages(
+            [
+                system_message,
+                (
+                    "human",
+                    "## 세계관\n\n{world_prompt}\n\n"
+                    "위 세계관을 바탕으로 모험의 시작 장면을 서술해주세요. "
+                    "모험가들이 어디에 있고, 무엇을 보고 느끼는지 생생하게 묘사해주세요. "
+                    "3인칭 서술자 시점으로 장면만 묘사하고, 플레이어에게 질문하지 마세요.",
+                ),
+            ]
+        )
 
         llm = ChatLiteLLM(
             model=llm_model,
@@ -101,9 +114,7 @@ async def _generate_opening_narrative(session_id, world_prompt, db, room_name, s
             )
             await asyncio.sleep(0.03)
 
-        logger.info(
-            f"오프닝 서술 생성 완료: 세션={session_id}, 토큰={token_count}개, 본문={len(narrative)}자"
-        )
+        logger.info(f"오프닝 서술 생성 완료: 세션={session_id}, 토큰={token_count}개, 본문={len(narrative)}자")
 
         story_log = StoryLog(
             session_id=session_id,
@@ -120,9 +131,7 @@ async def _generate_opening_narrative(session_id, world_prompt, db, room_name, s
         logger.info(f"오프닝 서술 DB 저장 완료: 세션={session_id}")
 
         # Act 1 생성
-        await _create_act_1(
-            session_id, world_prompt, narrative, story_log.id, db, room_name, sio
-        )
+        await _create_act_1(session_id, world_prompt, narrative, story_log.id, db, room_name, sio)
 
     except Exception as e:
         logger.error(f"오프닝 서술 생성 에러: {e}", exc_info=True)
@@ -140,7 +149,7 @@ async def _create_act_1(session_id, world_prompt, narrative_text, story_log_id, 
     try:
         from app.services.ai_nodes.act_analysis_node import generate_act_title
 
-        llm_model = get_active_llm_model()
+        llm_model = get_active_llm_model("judgment")
         title_data = await generate_act_title(world_prompt, narrative_text, llm_model)
 
         act = StoryAct(
@@ -187,7 +196,7 @@ async def _create_act_1(session_id, world_prompt, narrative_text, story_log_id, 
 async def _check_act_transition_after_narrative(session_id, db, room_name, sio):
     """Phase 3 서술 완료 후 막 전환을 체크합니다. (레거시 - 비스트리밍 폴백용)"""
     try:
-        llm_model = get_active_llm_model()
+        model_config = get_active_llm_models()
 
         from app.services.ai_gm_service_v2 import AIGMServiceV2
 
@@ -197,7 +206,11 @@ async def _check_act_transition_after_narrative(session_id, db, room_name, sio):
             room=room_name,
         )
 
-        ai_service = AIGMServiceV2(db=db, llm_model=llm_model)
+        ai_service = AIGMServiceV2(
+            db=db,
+            llm_model=model_config["story"],
+            judgment_model=model_config["judgment"],
+        )
         result = await ai_service.check_act_transition(session_id)
 
         if result is None:
@@ -228,6 +241,15 @@ async def _check_act_transition_after_narrative(session_id, db, room_name, sio):
                     "session_id": session_id,
                     "character_id": reward.character_id,
                     "growth": reward.model_dump(),
+                },
+                room=room_name,
+            )
+            await sio.emit(
+                "character_state_updated",
+                {
+                    "session_id": session_id,
+                    "character_id": reward.character_id,
+                    "reason": "act_growth_applied",
                 },
                 room=room_name,
             )
@@ -266,7 +288,7 @@ async def _handle_act_transition_from_metadata(session_id, metadata, db, room_na
         return
 
     try:
-        llm_model = get_active_llm_model()
+        model_config = get_active_llm_models()
 
         from app.services.ai_gm_service_v2 import AIGMServiceV2
 
@@ -276,7 +298,11 @@ async def _handle_act_transition_from_metadata(session_id, metadata, db, room_na
             room=room_name,
         )
 
-        ai_service = AIGMServiceV2(db=db, llm_model=llm_model)
+        ai_service = AIGMServiceV2(
+            db=db,
+            llm_model=model_config["story"],
+            judgment_model=model_config["judgment"],
+        )
         result = await ai_service.execute_act_transition(
             session_id=session_id,
             new_act_title=new_act_title,
@@ -315,6 +341,15 @@ async def _handle_act_transition_from_metadata(session_id, metadata, db, room_na
                 },
                 room=room_name,
             )
+            await sio.emit(
+                "character_state_updated",
+                {
+                    "session_id": session_id,
+                    "character_id": reward.character_id,
+                    "reason": "act_growth_applied",
+                },
+                room=room_name,
+            )
 
         logger.info(
             f"메타데이터 기반 막 전환 완료: 세션={session_id}, "
@@ -341,9 +376,7 @@ async def _promote_pending_judgments_to_phase2(session_id: int, db, room_name: s
         return 0
 
     character_ids = {j.character_id for j in pending}
-    character_name_map = {
-        c.id: c.name for c in db.query(Character).filter(Character.id.in_(character_ids)).all()
-    }
+    character_name_map = {c.id: c.name for c in db.query(Character).filter(Character.id.in_(character_ids)).all()}
 
     for judgment in pending:
         judgment.phase = 2
@@ -414,9 +447,7 @@ async def _recover_latest_orphan_judgments_to_phase2(session_id: int, db, room_n
         return 0
 
     character_ids = {j.character_id for j in latest_round}
-    character_name_map = {
-        c.id: c.name for c in db.query(Character).filter(Character.id.in_(character_ids)).all()
-    }
+    character_name_map = {c.id: c.name for c in db.query(Character).filter(Character.id.in_(character_ids)).all()}
 
     for judgment in latest_round:
         judgment.phase = 2
@@ -442,10 +473,67 @@ async def _recover_latest_orphan_judgments_to_phase2(session_id: int, db, room_n
         )
 
     await sio.emit("all_dice_rolled", {"session_id": session_id}, room=room_name)
-    logger.info(
-        f"복구 진행: 고아 판정 {len(latest_round)}개를 phase=2로 전환 (session={session_id})"
-    )
+    logger.info(f"복구 진행: 고아 판정 {len(latest_round)}개를 phase=2로 전환 (session={session_id})")
     return len(latest_round)
+
+
+async def _replay_growth_rewards_for_display_start(session_id: int, db, room_name: str, sio, trigger_sid: str) -> None:
+    """호스트 전환 버튼 클릭 시, 액트 완료 보상을 참가자에게 재동기화합니다."""
+    latest_act = (
+        db.query(StoryAct).filter(StoryAct.session_id == session_id).order_by(StoryAct.act_number.desc()).first()
+    )
+    if not latest_act or latest_act.act_number < 2:
+        return
+
+    completed_act_number = latest_act.act_number - 1
+    completed_act = (
+        db.query(StoryAct)
+        .filter(StoryAct.session_id == session_id, StoryAct.act_number == completed_act_number)
+        .first()
+    )
+    if not completed_act:
+        return
+
+    growth_logs = (
+        db.query(CharacterGrowthLog)
+        .filter(CharacterGrowthLog.session_id == session_id, CharacterGrowthLog.act_id == completed_act.id)
+        .order_by(CharacterGrowthLog.id.asc())
+        .all()
+    )
+    if not growth_logs:
+        return
+
+    character_ids = sorted({log.character_id for log in growth_logs})
+    character_name_map = {c.id: c.name for c in db.query(Character).filter(Character.id.in_(character_ids)).all()}
+
+    for growth_log in growth_logs:
+        growth_payload = {
+            "character_id": growth_log.character_id,
+            "character_name": character_name_map.get(growth_log.character_id, f"캐릭터 {growth_log.character_id}"),
+            "growth_type": growth_log.growth_type,
+            "growth_detail": growth_log.growth_detail,
+            "narrative_reason": growth_log.narrative_reason,
+        }
+        await sio.emit(
+            "character_growth_applied",
+            {
+                "session_id": session_id,
+                "character_id": growth_log.character_id,
+                "growth": growth_payload,
+            },
+            room=room_name,
+            skip_sid=trigger_sid,
+        )
+        await sio.emit(
+            "character_state_updated",
+            {
+                "session_id": session_id,
+                "character_id": growth_log.character_id,
+                "reason": "act_growth_applied",
+            },
+            room=room_name,
+            skip_sid=trigger_sid,
+        )
 
 
 def register_handlers(sio):
@@ -480,6 +568,7 @@ def register_handlers(sio):
                 return
 
             room_name = f"session_{session_id}"
+            await _replay_growth_rewards_for_display_start(session_id, db, room_name, sio, sid)
             await sio.emit("act_transition_display_start", {"session_id": session_id}, room=room_name)
         finally:
             db.close()
@@ -580,8 +669,12 @@ def register_handlers(sio):
                 )
 
                 # AI GM 서비스 초기화
-                llm_model = get_active_llm_model()
-                ai_service = AIGMServiceV2(db=db, llm_model=llm_model)
+                model_config = get_active_llm_models()
+                ai_service = AIGMServiceV2(
+                    db=db,
+                    llm_model=model_config["story"],
+                    judgment_model=model_config["judgment"],
+                )
 
                 # Phase 1: 행동 분석
                 analyses = await ai_service.analyze_actions(session_id=session_id, player_actions=[player_action])
@@ -705,9 +798,7 @@ def register_handlers(sio):
                     )
                     return
 
-            logger.info(
-                f"Phase 2 - 주사위 확인: 세션={session_id}, 캐릭터={character_id}, 판정={judgment_id}"
-            )
+            logger.info(f"Phase 2 - 주사위 확인: 세션={session_id}, 캐릭터={character_id}, 판정={judgment_id}")
 
             # 필수 필드 검증
             if not session_id or not character_id:
@@ -728,7 +819,12 @@ def register_handlers(sio):
                 # AIGMServiceV2로 주사위 확인
                 from app.services.ai_gm_service_v2 import AIGMServiceV2
 
-                ai_service = AIGMServiceV2(db=db)
+                model_config = get_active_llm_models()
+                ai_service = AIGMServiceV2(
+                    db=db,
+                    llm_model=model_config["story"],
+                    judgment_model=model_config["judgment"],
+                )
                 await ai_service.confirm_dice_roll(
                     session_id=session_id,
                     character_id=character_id,
@@ -1061,14 +1157,11 @@ def register_handlers(sio):
 
                     # Path A: Act 1 생성
                     await _create_act_1(
-                        session_id, session.world_prompt or "", starting_text,
-                        story_log.id, db, room_name, sio
+                        session_id, session.world_prompt or "", starting_text, story_log.id, db, room_name, sio
                     )
                 else:
                     # Path B: AI로 오프닝 서술 생성 (스트리밍)
-                    await _generate_opening_narrative(
-                        session_id, session.world_prompt or "", db, room_name, sio
-                    )
+                    await _generate_opening_narrative(session_id, session.world_prompt or "", db, room_name, sio)
 
             except Exception as e:
                 logger.error(f"start_game 에러: {e}", exc_info=True)
@@ -1223,8 +1316,12 @@ def register_handlers(sio):
 
             from app.services.ai_gm_service_v2 import AIGMServiceV2
 
-            llm_model = get_active_llm_model()
-            ai_service = AIGMServiceV2(db=db, llm_model=llm_model)
+            model_config = get_active_llm_models()
+            ai_service = AIGMServiceV2(
+                db=db,
+                llm_model=model_config["story"],
+                judgment_model=model_config["judgment"],
+            )
             updated_log = await ai_service.regenerate_latest_story(session_id=session_id)
 
             await sio.emit(
@@ -1284,11 +1381,15 @@ def register_handlers(sio):
                 # 세션 유효성 확인
                 session = db.query(GameSession).filter(GameSession.id == session_id).first()
                 if not session:
-                    await sio.emit("narrative_error", {"session_id": session_id, "error": "세션을 찾을 수 없습니다"}, to=sid)
+                    await sio.emit(
+                        "narrative_error", {"session_id": session_id, "error": "세션을 찾을 수 없습니다"}, to=sid
+                    )
                     return
 
                 if not session.is_active:
-                    await sio.emit("narrative_error", {"session_id": session_id, "error": "세션이 종료되었습니다"}, to=sid)
+                    await sio.emit(
+                        "narrative_error", {"session_id": session_id, "error": "세션이 종료되었습니다"}, to=sid
+                    )
                     return
 
                 # 방장 강제 진행 요청 시:
@@ -1347,13 +1448,9 @@ def register_handlers(sio):
                         )
                         return
 
-                    recovered_count = await _recover_latest_orphan_judgments_to_phase2(
-                        session_id, db, room_name, sio
-                    )
+                    recovered_count = await _recover_latest_orphan_judgments_to_phase2(session_id, db, room_name, sio)
                     if recovered_count > 0:
-                        logger.info(
-                            f"고아 판정 복구 후 이야기 생성: session={session_id}, recovered={recovered_count}"
-                        )
+                        logger.info(f"고아 판정 복구 후 이야기 생성: session={session_id}, recovered={recovered_count}")
                         await _trigger_story_generation_internal(session_id, db, room_name, sio)
                         return
 
@@ -1374,7 +1471,12 @@ def register_handlers(sio):
                 # AIGMServiceV2로 이야기 스트리밍
                 from app.services.ai_gm_service_v2 import AIGMServiceV2
 
-                ai_service = AIGMServiceV2(db=db)
+                model_config = get_active_llm_models()
+                ai_service = AIGMServiceV2(
+                    db=db,
+                    llm_model=model_config["story"],
+                    judgment_model=model_config["judgment"],
+                )
 
                 # 토큰 스트리밍
                 token_count = 0
@@ -1391,13 +1493,24 @@ def register_handlers(sio):
                 # 완료 이벤트
                 await sio.emit("narrative_complete", {"session_id": session_id}, room=room_name)
 
+                participants = db.query(SessionParticipant).filter(SessionParticipant.session_id == session_id).all()
+                refreshed_character_ids = sorted({p.character_id for p in participants})
+                for character_id in refreshed_character_ids:
+                    await sio.emit(
+                        "character_state_updated",
+                        {
+                            "session_id": session_id,
+                            "character_id": character_id,
+                            "reason": "post_narrative_sync",
+                        },
+                        room=room_name,
+                    )
+
                 logger.info(f"이야기 스트림 완료: 세션={session_id}")
 
                 # 메타데이터 기반 막 전환 체크
                 narrative_metadata = buffer.metadata if buffer else None
-                await _handle_act_transition_from_metadata(
-                    session_id, narrative_metadata, db, room_name, sio
-                )
+                await _handle_act_transition_from_metadata(session_id, narrative_metadata, db, room_name, sio)
 
             except ValueError as e:
                 logger.error(f"이야기 스트림 에러: 세션={session_id}, {e}")
@@ -1510,8 +1623,12 @@ async def _trigger_story_generation_internal(session_id: int, db, room_name: str
             dice_results.append(dice_result)
 
         # AI GM 서비스 초기화
-        llm_model = get_active_llm_model()
-        ai_service = AIGMServiceV2(db=db, llm_model=llm_model)
+        model_config = get_active_llm_models()
+        ai_service = AIGMServiceV2(
+            db=db,
+            llm_model=model_config["story"],
+            judgment_model=model_config["judgment"],
+        )
 
         # Phase 3: 이야기 생성 (무한 대기 방지를 위한 타임아웃)
         narrative_timeout_sec = int(os.getenv("NARRATIVE_GENERATION_TIMEOUT_SEC", "180"))
@@ -1521,9 +1638,7 @@ async def _trigger_story_generation_internal(session_id: int, db, room_name: str
                 timeout=narrative_timeout_sec,
             )
         except asyncio.TimeoutError as timeout_error:
-            raise ValueError(
-                f"이야기 생성 제한시간({narrative_timeout_sec}초)을 초과했습니다"
-            ) from timeout_error
+            raise ValueError(f"이야기 생성 제한시간({narrative_timeout_sec}초)을 초과했습니다") from timeout_error
 
         # 이야기 토큰 스트리밍
         narrative = result.full_narrative
@@ -1578,14 +1693,25 @@ async def _trigger_story_generation_internal(session_id: int, db, room_name: str
             room=room_name,
         )
 
+        participants = db.query(SessionParticipant).filter(SessionParticipant.session_id == session_id).all()
+        refreshed_character_ids = sorted({p.character_id for p in participants})
+        for character_id in refreshed_character_ids:
+            await sio.emit(
+                "character_state_updated",
+                {
+                    "session_id": session_id,
+                    "character_id": character_id,
+                    "reason": "post_narrative_sync",
+                },
+                room=room_name,
+            )
+
         logger.info(f"Phase 3 완료: 세션={session_id}, 이야기 길이={len(narrative)}")
 
         # 메타데이터 기반 막 전환 체크
         narrative_metadata = result.narrative_metadata
         if narrative_metadata:
-            await _handle_act_transition_from_metadata(
-                session_id, narrative_metadata, db, room_name, sio
-            )
+            await _handle_act_transition_from_metadata(session_id, narrative_metadata, db, room_name, sio)
         else:
             # fallback: 메타데이터 없으면 레거시 방식
             await _check_act_transition_after_narrative(session_id, db, room_name, sio)
