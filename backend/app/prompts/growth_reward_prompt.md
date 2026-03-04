@@ -10,13 +10,11 @@
 ### 좋은 예시
 - 전투를 많이 한 전사 → 근력(strength) +1
 - 함정을 해제하며 고생한 도적 → 민첩(dexterity) +1 또는 새 스킬 "함정 감지"
-- 공포를 마주하고 버텨낸 캐릭터 → "어둠 공포" 약점 완화
 - 설득과 협상을 이끈 캐릭터 → 매력(charisma) +1
 
 ### 나쁜 예시 (금지)
 - 전투만 한 캐릭터에게 지능 +1 (서사적 연관 없음)
 - 아무 연관 없는 스킬 부여
-- 겪지 않은 약점의 완화
 
 ## 보상 규칙
 
@@ -37,11 +35,6 @@
 - **중요: 새 스킬은 반드시 액티브(active)만 허용됩니다. 패시브(passive)는 절대 생성하지 마세요.**
 - 새 스킬에는 `cooldown_actions`(기본 3) 값을 포함하세요
 
-### 4. 약점 완화 (선택)
-- 약점과 관련된 상황을 겪고 극복한 캐릭터에게 부여
-- **반드시 캐릭터가 가진 약점만** 완화 가능
-- mitigation이 3 이상이 되면 서사적으로 극복한 것으로 간주
-
 ## 보상 유형 상세
 
 ### `ability_increase` — 능력치 상승
@@ -53,11 +46,6 @@
 - 경험을 통해 자연스럽게 배운 스킬 (액티브만 허용)
 - `growth_detail`: `{"skill": {"type": "active", "name": "함정 감지", "description": "짧은 집중 후 주변의 함정 단서를 포착한다", "ability": "wisdom", "cooldown_actions": 3}}`
 - 기존 스킬과 중복되지 않게 하세요
-
-### `weakness_mitigated` — 약점 완화
-- 약점을 **제거하지 않고 완화**합니다 (mitigation +1)
-- `growth_detail`: `{"weakness": "어둠 공포", "mitigation_delta": 1}`
-- **반드시 캐릭터가 가진 약점만** 완화할 수 있습니다
 
 ## 출력 형식
 
@@ -86,13 +74,6 @@
     "growth_detail": {"ability": "wisdom", "delta": 1},
     "narrative_reason": "동료들을 이끌며 상황을 판단하는 눈이 한층 성숙해졌다."
   },
-  {
-    "character_id": 2,
-    "character_name": "리나",
-    "growth_type": "weakness_mitigated",
-    "growth_detail": {"weakness": "어둠 공포", "mitigation_delta": 1},
-    "narrative_reason": "어둠 속 동굴에서 동료들과 함께 버텨내며, 리나는 어둠에 대한 두려움이 조금 줄어들었음을 느꼈다."
-  }
 ]
 ```
 

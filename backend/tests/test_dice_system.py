@@ -82,16 +82,16 @@ class TestCalculateAbilityModifier:
     @pytest.mark.parametrize(
         "score,expected",
         [
-            (10, 0),   # Average
-            (11, 0),   # Average (odd)
+            (10, 0),  # Average
+            (11, 0),  # Average (odd)
             (12, 1),
             (14, 2),
-            (15, 2),   # Floor division
+            (15, 2),  # Floor division
             (18, 4),
             (20, 5),
             (8, -1),
             (6, -2),
-            (1, -5),   # Minimum
+            (1, -5),  # Minimum
             (30, 10),  # Maximum
         ],
     )
@@ -103,25 +103,33 @@ class TestGetAbilityScore:
     """Tests for DiceSystem.get_ability_score."""
 
     def test_get_strength(self, db_session, sample_user):
-        character = _make_character(db_session, sample_user, {
-            "strength": 18,
-            "dexterity": 14,
-            "constitution": 12,
-            "intelligence": 10,
-            "wisdom": 10,
-            "charisma": 10,
-        })
+        character = _make_character(
+            db_session,
+            sample_user,
+            {
+                "strength": 18,
+                "dexterity": 14,
+                "constitution": 12,
+                "intelligence": 10,
+                "wisdom": 10,
+                "charisma": 10,
+            },
+        )
         assert DiceSystem.get_ability_score(character, ActionType.STRENGTH) == 18
 
     def test_get_dexterity(self, db_session, sample_user):
-        character = _make_character(db_session, sample_user, {
-            "strength": 10,
-            "dexterity": 16,
-            "constitution": 10,
-            "intelligence": 10,
-            "wisdom": 10,
-            "charisma": 10,
-        })
+        character = _make_character(
+            db_session,
+            sample_user,
+            {
+                "strength": 10,
+                "dexterity": 16,
+                "constitution": 10,
+                "intelligence": 10,
+                "wisdom": 10,
+                "charisma": 10,
+            },
+        )
         assert DiceSystem.get_ability_score(character, ActionType.DEXTERITY) == 16
 
     def test_all_action_types(self, db_session, sample_user):
@@ -152,38 +160,58 @@ class TestApplyStatusEffects:
         assert DiceSystem.apply_status_effects(3, character) == 3
 
     def test_positive_modifier(self, db_session, sample_user):
-        character = _make_character(db_session, sample_user, {
-            "status_effects": [{"name": "Blessed", "modifier": 2}],
-        })
+        character = _make_character(
+            db_session,
+            sample_user,
+            {
+                "status_effects": [{"name": "Blessed", "modifier": 2}],
+            },
+        )
         assert DiceSystem.apply_status_effects(3, character) == 5
 
     def test_negative_modifier(self, db_session, sample_user):
-        character = _make_character(db_session, sample_user, {
-            "status_effects": [{"name": "Cursed", "modifier": -3}],
-        })
+        character = _make_character(
+            db_session,
+            sample_user,
+            {
+                "status_effects": [{"name": "Cursed", "modifier": -3}],
+            },
+        )
         assert DiceSystem.apply_status_effects(3, character) == 0
 
     def test_multiple_effects(self, db_session, sample_user):
-        character = _make_character(db_session, sample_user, {
-            "status_effects": [
-                {"name": "Blessed", "modifier": 2},
-                {"name": "Weakened", "modifier": -1},
-            ],
-        })
+        character = _make_character(
+            db_session,
+            sample_user,
+            {
+                "status_effects": [
+                    {"name": "Blessed", "modifier": 2},
+                    {"name": "Weakened", "modifier": -1},
+                ],
+            },
+        )
         assert DiceSystem.apply_status_effects(3, character) == 4
 
     def test_string_effects_ignored(self, db_session, sample_user):
         """Legacy string effects should not affect modifier."""
-        character = _make_character(db_session, sample_user, {
-            "status_effects": ["Blessed", "Inspired"],
-        })
+        character = _make_character(
+            db_session,
+            sample_user,
+            {
+                "status_effects": ["Blessed", "Inspired"],
+            },
+        )
         assert DiceSystem.apply_status_effects(3, character) == 3
 
     def test_dict_effects_without_modifier(self, db_session, sample_user):
         """Dict effects without modifier field should not affect result."""
-        character = _make_character(db_session, sample_user, {
-            "status_effects": [{"name": "Haste", "duration": 3}],
-        })
+        character = _make_character(
+            db_session,
+            sample_user,
+            {
+                "status_effects": [{"name": "Haste", "duration": 3}],
+            },
+        )
         assert DiceSystem.apply_status_effects(3, character) == 3
 
     def test_no_status_effects_key(self, db_session, sample_user):
@@ -196,30 +224,80 @@ class TestCalculateModifier:
     """Tests for DiceSystem.calculate_modifier (full pipeline)."""
 
     def test_basic_modifier(self, db_session, sample_user):
-        character = _make_character(db_session, sample_user, {
-            "strength": 18,
-            "dexterity": 10,
-            "constitution": 10,
-            "intelligence": 10,
-            "wisdom": 10,
-            "charisma": 10,
-            "status_effects": [],
-        })
+        character = _make_character(
+            db_session,
+            sample_user,
+            {
+                "strength": 18,
+                "dexterity": 10,
+                "constitution": 10,
+                "intelligence": 10,
+                "wisdom": 10,
+                "charisma": 10,
+                "status_effects": [],
+            },
+        )
         # STR 18 -> (18-10)//2 = 4
         assert DiceSystem.calculate_modifier(character, ActionType.STRENGTH) == 4
 
     def test_modifier_with_status_effects(self, db_session, sample_user):
-        character = _make_character(db_session, sample_user, {
-            "strength": 14,
-            "dexterity": 10,
-            "constitution": 10,
-            "intelligence": 10,
-            "wisdom": 10,
-            "charisma": 10,
-            "status_effects": [{"name": "Blessed", "modifier": 2}],
-        })
+        character = _make_character(
+            db_session,
+            sample_user,
+            {
+                "strength": 14,
+                "dexterity": 10,
+                "constitution": 10,
+                "intelligence": 10,
+                "wisdom": 10,
+                "charisma": 10,
+                "status_effects": [{"name": "Blessed", "modifier": 2}],
+            },
+        )
         # STR 14 -> (14-10)//2 = 2, + blessed 2 = 4
         assert DiceSystem.calculate_modifier(character, ActionType.STRENGTH) == 4
+
+    def test_modifier_with_unified_statuses(self, db_session, sample_user):
+        character = _make_character(
+            db_session,
+            sample_user,
+            {
+                "strength": 14,
+                "statuses": [
+                    {"name": "Inspired", "modifier": 1, "duration_type": "scene", "type": "buff"},
+                    {"name": "Fear", "modifier": -2, "duration_type": "permanent", "type": "debuff"},
+                ],
+                "status_effects": [],
+            },
+        )
+
+        assert DiceSystem.calculate_modifier(character, ActionType.STRENGTH) == 1
+
+    def test_modifier_with_equipped_inventory_item(self, db_session, sample_user):
+        character = _make_character(
+            db_session,
+            sample_user,
+            {
+                "charisma": 14,
+                "status_effects": [],
+                "inventory": [
+                    {
+                        "name": "Silver Tongue Ring",
+                        "equipped": True,
+                        "modifier": 1,
+                        "action_modifiers": {"charisma": 2},
+                    },
+                    {
+                        "name": "Backpack",
+                        "equipped": False,
+                        "modifier": 10,
+                    },
+                ],
+            },
+        )
+
+        # CHA 14 -> +2, equipped item +1 +2 = +3
+        assert DiceSystem.calculate_modifier(character, ActionType.CHARISMA) == 5
 
 
 class TestDetermineOutcome:

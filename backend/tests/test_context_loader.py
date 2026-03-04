@@ -83,6 +83,7 @@ def sample_character(db_session, sample_user):
             "skills": {"Athletics": 5, "Perception": 3},
             "weaknesses": ["Fear of heights"],
             "status_effects": ["Blessed", {"name": "Haste", "duration": 3}],
+            "inventory": ["Rope", {"name": "Lucky Charm", "equipped": True, "modifier": 1}],
         },
         created_at=datetime.utcnow(),
     )
@@ -240,6 +241,9 @@ def test_character_to_sheet_success(sample_character):
     assert sheet.weaknesses == ["Fear of heights"]
     assert "Blessed" in sheet.status_effects
     assert "Haste" in sheet.status_effects
+    assert any(status["name"] == "Fear of heights" for status in sheet.statuses)
+    assert any(status["name"] == "Blessed" for status in sheet.statuses)
+    assert any(item["name"] == "Rope" for item in sheet.inventory)
 
 
 def test_character_to_sheet_defaults(db_session, sample_user):

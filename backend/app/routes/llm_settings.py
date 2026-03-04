@@ -6,7 +6,7 @@
 import os
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -44,6 +44,8 @@ class ModelResponse(BaseModel):
     model_id: str
     display_name: str
     is_active: bool
+    is_active_story: bool
+    is_active_judgment: bool
     has_api_key: bool
     created_at: str
 
@@ -52,8 +54,17 @@ class LLMSettingsResponse(BaseModel):
     api_keys: list[ApiKeyResponse]
     models: list[ModelResponse]
     active_model: ModelResponse | None
+    active_story_model: ModelResponse | None
+    active_judgment_model: ModelResponse | None
     active_source: str
+    active_story_source: str
+    active_judgment_source: str
     env_model: str | None
+    env_story_model: str | None
+    env_judgment_model: str | None
+
+
+VALID_PURPOSES = {"story", "judgment"}
 
 
 # --- Helpers ---
@@ -86,6 +97,17 @@ def _apply_model_to_env(model: LLMModel, db: Session):
         os.environ["OPENAI_API_KEY"] = plain_key
 
 
+def _normalize_purpose(purpose: str) -> str:
+    normalized = (purpose or "story").strip().lower()
+    if normalized not in VALID_PURPOSES:
+        raise HTTPException(status_code=400, detail=f"Invalid purpose: {purpose}")
+    return normalized
+
+
+def _is_any_active(model: LLMModel) -> bool:
+    return bool(model.is_active_story or model.is_active_judgment)
+
+
 PROVIDERS = [
     {"provider": "openai", "display": "OpenAI"},
     {"provider": "gemini", "display": "Google Gemini"},
@@ -109,46 +131,68 @@ def get_llm_settings(user_id: int, db: Session = Depends(get_db)):
     for p in PROVIDERS:
         row = api_key_map.get(p["provider"])
         if row:
-            api_keys_resp.append(ApiKeyResponse(
-                provider=row.provider,
-                provider_display=row.provider_display,
-                api_key_masked=_mask_api_key(row.api_key_encrypted),
-                updated_at=row.updated_at.isoformat(),
-            ))
+            api_keys_resp.append(
+                ApiKeyResponse(
+                    provider=row.provider,
+                    provider_display=row.provider_display,
+                    api_key_masked=_mask_api_key(row.api_key_encrypted),
+                    updated_at=row.updated_at.isoformat(),
+                )
+            )
         else:
-            api_keys_resp.append(ApiKeyResponse(
-                provider=p["provider"],
-                provider_display=p["display"],
-                api_key_masked="",
-                updated_at="",
-            ))
+            api_keys_resp.append(
+                ApiKeyResponse(
+                    provider=p["provider"],
+                    provider_display=p["display"],
+                    api_key_masked="",
+                    updated_at="",
+                )
+            )
 
     # Models
     models = db.query(LLMModel).order_by(LLMModel.created_at.desc()).all()
     models_resp = []
     active_model = None
+    active_story_model = None
+    active_judgment_model = None
     for m in models:
         resp = ModelResponse(
             id=m.id,
             provider=m.provider,
             model_id=m.model_id,
             display_name=m.display_name,
-            is_active=m.is_active,
+            is_active=_is_any_active(m),
+            is_active_story=bool(m.is_active_story),
+            is_active_judgment=bool(m.is_active_judgment),
             has_api_key=m.provider in api_key_map,
             created_at=m.created_at.isoformat(),
         )
         models_resp.append(resp)
-        if m.is_active:
-            active_model = resp
+        if resp.is_active_story:
+            active_story_model = resp
+        if resp.is_active_judgment:
+            active_judgment_model = resp
 
-    active_in_db = active_model is not None
+    active_model = active_story_model or active_judgment_model
+
+    active_story_in_db = active_story_model is not None
+    active_judgment_in_db = active_judgment_model is not None
 
     return LLMSettingsResponse(
         api_keys=api_keys_resp,
         models=models_resp,
         active_model=active_model,
-        active_source="database" if active_in_db else "environment",
+        active_story_model=active_story_model,
+        active_judgment_model=active_judgment_model,
+        active_source="database" if active_story_in_db else "environment",
+        active_story_source="database" if active_story_in_db else "environment",
+        active_judgment_source="database" if active_judgment_in_db else "environment",
         env_model=os.getenv("LLM_MODEL", "gpt-4o"),
+        env_story_model=os.getenv("LLM_MODEL_STORY") or os.getenv("LLM_MODEL") or "gpt-4o",
+        env_judgment_model=os.getenv("LLM_MODEL_JUDGMENT")
+        or os.getenv("LLM_MODEL_FAST")
+        or os.getenv("LLM_MODEL")
+        or "gpt-4o-mini",
     )
 
 
@@ -184,7 +228,14 @@ def set_api_key(provider: str, body: ApiKeySetRequest, user_id: int, db: Session
     db.refresh(row)
 
     # If active model uses this provider, update env
-    active = db.query(LLMModel).filter(LLMModel.is_active == True, LLMModel.provider == provider).first()  # noqa: E712
+    active = (
+        db.query(LLMModel)
+        .filter(
+            LLMModel.provider == provider,
+            ((LLMModel.is_active_story == True) | (LLMModel.is_active_judgment == True)),  # noqa: E712
+        )
+        .first()
+    )
     if active:
         _apply_model_to_env(active, db)
 
@@ -206,7 +257,14 @@ def delete_api_key(provider: str, user_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="API key not found")
 
     # Check if any active model uses this provider
-    active = db.query(LLMModel).filter(LLMModel.is_active == True, LLMModel.provider == provider).first()  # noqa: E712
+    active = (
+        db.query(LLMModel)
+        .filter(
+            LLMModel.provider == provider,
+            ((LLMModel.is_active_story == True) | (LLMModel.is_active_judgment == True)),  # noqa: E712
+        )
+        .first()
+    )
     if active:
         raise HTTPException(status_code=400, detail="Cannot delete API key while an active model uses this provider")
 
@@ -250,7 +308,9 @@ def add_model(body: ModelCreateRequest, user_id: int, db: Session = Depends(get_
         provider=model.provider,
         model_id=model.model_id,
         display_name=model.display_name,
-        is_active=model.is_active,
+        is_active=_is_any_active(model),
+        is_active_story=bool(model.is_active_story),
+        is_active_judgment=bool(model.is_active_judgment),
         has_api_key=has_key,
         created_at=model.created_at.isoformat(),
     )
@@ -265,7 +325,7 @@ def remove_model(model_id: int, user_id: int, db: Session = Depends(get_db)):
     if not model:
         raise HTTPException(status_code=404, detail="Model not found")
 
-    if model.is_active:
+    if _is_any_active(model):
         raise HTTPException(status_code=400, detail="Cannot delete active model. Deactivate first.")
 
     db.delete(model)
@@ -275,9 +335,14 @@ def remove_model(model_id: int, user_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/models/{model_id}/activate", response_model=ModelResponse)
-def activate_model(model_id: int, user_id: int, db: Session = Depends(get_db)):
-    """Activate a model (deactivates all others). Admin only."""
+def activate_model(
+    model_id: int,
+    user_id: int,
+    purpose: str = Query("story"),
+    db: Session = Depends(get_db),
+):
     verify_admin(user_id, db)
+    normalized_purpose = _normalize_purpose(purpose)
 
     model = db.query(LLMModel).filter(LLMModel.id == model_id).first()
     if not model:
@@ -286,12 +351,22 @@ def activate_model(model_id: int, user_id: int, db: Session = Depends(get_db)):
     # Check API key exists
     has_key = db.query(LLMApiKey).filter(LLMApiKey.provider == model.provider).first()
     if not has_key:
-        raise HTTPException(status_code=400, detail=f"No API key set for provider '{model.provider}'. Set an API key first.")
+        raise HTTPException(
+            status_code=400, detail=f"No API key set for provider '{model.provider}'. Set an API key first."
+        )
 
-    # Deactivate all others
-    db.query(LLMModel).filter(LLMModel.id != model_id).update({"is_active": False})
+    if normalized_purpose == "judgment":
+        db.query(LLMModel).update({"is_active_judgment": False})
+        model.is_active_judgment = True
+    else:
+        db.query(LLMModel).update({"is_active_story": False})
+        model.is_active_story = True
 
-    model.is_active = True
+    model.is_active = _is_any_active(model)
+
+    for other in db.query(LLMModel).filter(LLMModel.id != model_id).all():
+        other.is_active = _is_any_active(other)
+
     db.commit()
     db.refresh(model)
 
@@ -302,22 +377,37 @@ def activate_model(model_id: int, user_id: int, db: Session = Depends(get_db)):
         provider=model.provider,
         model_id=model.model_id,
         display_name=model.display_name,
-        is_active=model.is_active,
+        is_active=_is_any_active(model),
+        is_active_story=bool(model.is_active_story),
+        is_active_judgment=bool(model.is_active_judgment),
         has_api_key=True,
         created_at=model.created_at.isoformat(),
     )
 
 
 @router.post("/models/{model_id}/deactivate", response_model=ModelResponse)
-def deactivate_model(model_id: int, user_id: int, db: Session = Depends(get_db)):
-    """Deactivate a model (falls back to env vars). Admin only."""
+def deactivate_model(
+    model_id: int,
+    user_id: int,
+    purpose: str = Query("story"),
+    db: Session = Depends(get_db),
+):
     verify_admin(user_id, db)
+    normalized_purpose = _normalize_purpose(purpose)
 
     model = db.query(LLMModel).filter(LLMModel.id == model_id).first()
     if not model:
         raise HTTPException(status_code=404, detail="Model not found")
 
-    model.is_active = False
+    if normalized_purpose == "judgment":
+        model.is_active_judgment = False
+    else:
+        model.is_active_story = False
+    model.is_active = _is_any_active(model)
+
+    for other in db.query(LLMModel).filter(LLMModel.id != model.id).all():
+        other.is_active = _is_any_active(other)
+
     db.commit()
     db.refresh(model)
 
@@ -328,7 +418,9 @@ def deactivate_model(model_id: int, user_id: int, db: Session = Depends(get_db))
         provider=model.provider,
         model_id=model.model_id,
         display_name=model.display_name,
-        is_active=model.is_active,
+        is_active=_is_any_active(model),
+        is_active_story=bool(model.is_active_story),
+        is_active_judgment=bool(model.is_active_judgment),
         has_api_key=has_key,
         created_at=model.created_at.isoformat(),
     )

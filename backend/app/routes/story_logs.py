@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import ActionJudgment, Character, GameSession, StoryAct, StoryLog
+from app.services.session_activity_logger import log_session_activity
 from app.utils.timezone import to_kst_iso
 
 router = APIRouter(prefix="/api/story_logs", tags=["story_logs"])
@@ -276,6 +277,17 @@ def create_story_log(
 
     try:
         db.add(new_log)
+        db.flush()
+        log_session_activity(
+            db,
+            session_id=session_id,
+            actor_user_id=user_id,
+            source="api",
+            action_type="story.create",
+            status="success",
+            message="스토리 메시지 추가",
+            detail={"story_log_id": new_log.id, "role": new_log.role},
+        )
         db.commit()
         db.refresh(new_log)
         return StoryLogResponse(
@@ -318,6 +330,16 @@ def update_story_log(
         log.content = content
 
     try:
+        log_session_activity(
+            db,
+            session_id=log.session_id,
+            actor_user_id=user_id,
+            source="api",
+            action_type="story.update",
+            status="success",
+            message="스토리 메시지 수정",
+            detail={"story_log_id": log.id, "role": log.role},
+        )
         db.commit()
         db.refresh(log)
         return StoryLogResponse(
@@ -343,6 +365,7 @@ def delete_story_log(log_id: int, user_id: int, db: Session = Depends(get_db)):
     _ensure_host_manageable_session(session, user_id)
 
     try:
+        session_id = log.session_id
         detached_judgments = (
             db.query(ActionJudgment)
             .filter(ActionJudgment.story_log_id == log.id)
@@ -350,6 +373,16 @@ def delete_story_log(log_id: int, user_id: int, db: Session = Depends(get_db)):
         )
         db.query(StoryAct).filter(StoryAct.start_story_log_id == log.id).update({"start_story_log_id": None})
         db.query(StoryAct).filter(StoryAct.end_story_log_id == log.id).update({"end_story_log_id": None})
+        log_session_activity(
+            db,
+            session_id=session_id,
+            actor_user_id=user_id,
+            source="api",
+            action_type="story.delete",
+            status="success",
+            message="스토리 메시지 삭제",
+            detail={"story_log_id": log.id, "detached_judgment_count": detached_judgments},
+        )
         db.delete(log)
         db.commit()
         return {
@@ -372,6 +405,7 @@ def delete_judgment(judgment_id: int, user_id: int, db: Session = Depends(get_db
     _ensure_host_manageable_session(session, user_id)
 
     try:
+        session_id = judgment.session_id
         removed_from_snapshots = 0
         user_logs = (
             db.query(StoryLog)
@@ -389,6 +423,17 @@ def delete_judgment(judgment_id: int, user_id: int, db: Session = Depends(get_db
                 removed_from_snapshots += len(original_items) - len(filtered_items)
                 user_log.judgments_data = filtered_items or None
 
+        log_session_activity(
+            db,
+            session_id=session_id,
+            actor_user_id=user_id,
+            actor_character_id=judgment.character_id,
+            source="api",
+            action_type="story.judgment_delete",
+            status="success",
+            message="행동 메시지 삭제",
+            detail={"judgment_id": judgment.id, "removed_from_snapshots": removed_from_snapshots},
+        )
         db.delete(judgment)
         db.commit()
         return {

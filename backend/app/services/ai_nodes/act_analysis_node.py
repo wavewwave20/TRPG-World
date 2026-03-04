@@ -3,8 +3,8 @@
 import json
 import logging
 
-from langchain_litellm import ChatLiteLLM
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_litellm import ChatLiteLLM
 
 from app.schemas import (
     ActTransitionAnalysis,
@@ -16,6 +16,15 @@ from app.schemas import (
 from app.utils.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
+
+VALID_ABILITY_KEYS = {
+    "strength",
+    "dexterity",
+    "constitution",
+    "intelligence",
+    "wisdom",
+    "charisma",
+}
 
 
 async def analyze_act_transition(
@@ -40,10 +49,7 @@ async def analyze_act_transition(
     Returns:
         ActTransitionAnalysis: 전환 분석 결과
     """
-    logger.info(
-        f"막 전환 분석 시작: {current_act.act_number}막 '{current_act.title}', "
-        f"스토리 {len(story_history)}개"
-    )
+    logger.info(f"막 전환 분석 시작: {current_act.act_number}막 '{current_act.title}', 스토리 {len(story_history)}개")
 
     system_message = load_prompt("act_analysis_prompt.md")
 
@@ -83,8 +89,7 @@ async def analyze_act_transition(
             system_message,
             (
                 "human",
-                "{context}\n\n"
-                "위 스토리를 분석하여 막 전환 여부를 JSON으로 응답해주세요.",
+                "{context}\n\n위 스토리를 분석하여 막 전환 여부를 JSON으로 응답해주세요.",
             ),
         ]
     )
@@ -108,8 +113,7 @@ async def analyze_act_transition(
             result.new_act_subtitle = None
 
         logger.info(
-            f"막 전환 분석 완료: 사건 {result.event_count}개, "
-            f"전환={'예' if result.should_transition else '아니오'}"
+            f"막 전환 분석 완료: 사건 {result.event_count}개, 전환={'예' if result.should_transition else '아니오'}"
         )
         return result
 
@@ -155,9 +159,7 @@ async def generate_act_title(
             ),
             (
                 "human",
-                "## 세계관\n\n{world_context}\n\n"
-                "## 오프닝 서술\n\n{narrative}\n\n"
-                "1막의 제목과 부제를 생성해주세요.",
+                "## 세계관\n\n{world_context}\n\n## 오프닝 서술\n\n{narrative}\n\n1막의 제목과 부제를 생성해주세요.",
             ),
         ]
     )
@@ -171,9 +173,7 @@ async def generate_act_title(
     chain = chat_template | llm
 
     try:
-        response = await chain.ainvoke(
-            {"world_context": world_context, "narrative": narrative_text}
-        )
+        response = await chain.ainvoke({"world_context": world_context, "narrative": narrative_text})
         data = _extract_json(response.content.strip())
         title = data.get("title", "1막")
         subtitle = data.get("subtitle")
@@ -204,10 +204,7 @@ async def generate_growth_rewards(
     Returns:
         list[GrowthReward]: 캐릭터별 성장 보상 목록
     """
-    logger.info(
-        f"성장 보상 생성 시작: {act_info.act_number}막 '{act_info.title}', "
-        f"캐릭터 {len(characters)}명"
-    )
+    logger.info(f"성장 보상 생성 시작: {act_info.act_number}막 '{act_info.title}', 캐릭터 {len(characters)}명")
 
     system_message = load_prompt("growth_reward_prompt.md")
 
@@ -235,9 +232,7 @@ async def generate_growth_rewards(
             weakness_names = []
             for w in char.weaknesses:
                 if isinstance(w, dict):
-                    name = w.get("name", str(w))
-                    mitigation = w.get("mitigation", 0)
-                    weakness_names.append(f"{name} (완화: {mitigation}/3)")
+                    weakness_names.append(str(w.get("name", "")).strip() or str(w))
                 else:
                     weakness_names.append(str(w))
             detail += f"- 약점: {', '.join(weakness_names)}\n"
@@ -259,8 +254,7 @@ async def generate_growth_rewards(
             system_message,
             (
                 "human",
-                "{context}\n\n"
-                "위 스토리를 바탕으로 각 캐릭터의 성장 보상을 JSON 배열로 응답해주세요.",
+                "{context}\n\n위 스토리를 바탕으로 각 캐릭터의 성장 보상을 JSON 배열로 응답해주세요.",
             ),
         ]
     )
@@ -299,15 +293,15 @@ def _parse_act_analysis(response_text: str) -> ActTransitionAnalysis:
     )
 
 
-def _parse_growth_rewards(
-    response_text: str, characters: list[CharacterSheet]
-) -> list[GrowthReward]:
+def _parse_growth_rewards(response_text: str, characters: list[CharacterSheet]) -> list[GrowthReward]:
     """AI 응답에서 성장 보상을 파싱합니다."""
     data = _extract_json(response_text)
 
     # JSON 배열이 아닌 경우 처리
     if isinstance(data, dict):
         data = data.get("rewards", [data])
+    elif not isinstance(data, list):
+        data = []
 
     valid_char_ids = {c.id for c in characters}
     char_name_map = {c.id: c.name for c in characters}
@@ -320,7 +314,7 @@ def _parse_growth_rewards(
             continue
 
         growth_type = item.get("growth_type", "")
-        if growth_type not in ("ability_increase", "new_skill", "weakness_mitigated"):
+        if growth_type not in ("ability_increase", "new_skill"):
             logger.warning(f"잘못된 growth_type: {growth_type}, 스킵")
             continue
 
@@ -334,19 +328,42 @@ def _parse_growth_rewards(
 
             skill_type = str(skill.get("type", "active")).strip().lower() or "active"
             if skill_type != "active":
-                logger.warning(
-                    f"캐릭터 {char_id}: new_skill 보상에 passive 감지 -> active로 강제 변환"
-                )
+                logger.warning(f"캐릭터 {char_id}: new_skill 보상에 passive 감지 -> active로 강제 변환")
                 skill_type = "active"
 
             skill["type"] = "active"
             skill.setdefault("cooldown_actions", 3)
             growth_detail = {"skill": skill}
+        else:
+            # ability_increase는 유효 ability/delta 형태로 강제 정규화합니다.
+            raw_ability = ""
+            raw_delta = 1
+            if isinstance(growth_detail, dict):
+                raw_ability = str(growth_detail.get("ability") or "").strip().lower()
+                raw_delta = growth_detail.get("delta", 1)
+
+            if raw_ability not in VALID_ABILITY_KEYS:
+                logger.warning(
+                    f"캐릭터 {char_id}: 잘못된 ability_increase ability='{raw_ability}', constitution으로 대체"
+                )
+                raw_ability = "constitution"
+
+            try:
+                delta = int(raw_delta)
+            except (TypeError, ValueError):
+                logger.warning(f"캐릭터 {char_id}: 잘못된 ability_increase delta='{raw_delta}', 1로 대체")
+                delta = 1
+
+            if delta <= 0:
+                logger.warning(f"캐릭터 {char_id}: 0 이하 delta={delta}, 1로 대체")
+                delta = 1
+
+            growth_detail = {"ability": raw_ability, "delta": delta}
 
         rewards.append(
             GrowthReward(
                 character_id=char_id,
-                character_name=item.get("character_name", ""),
+                character_name=item.get("character_name") or char_name_map.get(char_id, ""),
                 growth_type=growth_type,
                 growth_detail=growth_detail,
                 narrative_reason=item.get("narrative_reason", ""),

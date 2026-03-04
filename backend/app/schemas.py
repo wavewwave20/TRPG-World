@@ -225,6 +225,8 @@ class CharacterSheet(BaseModel):
     skills: list[dict[str, Any]] = Field(default_factory=list, description="유형, 이름, 설명이 포함된 스킬 목록")
     weaknesses: list[str | dict[str, Any]] = Field(default_factory=list)
     status_effects: list[str | dict[str, Any]] = Field(default_factory=list)
+    statuses: list[dict[str, Any]] = Field(default_factory=list)
+    inventory: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class StoryLogEntry(BaseModel):
@@ -296,7 +298,7 @@ class GrowthReward(BaseModel):
 
     character_id: int
     character_name: str
-    growth_type: str = Field(..., description="ability_increase | new_skill | weakness_mitigated")
+    growth_type: str = Field(..., description="ability_increase | new_skill")
     growth_detail: dict[str, Any] = Field(..., description="성장 상세 (JSON)")
     narrative_reason: str = Field(..., description="서사적 성장 이유")
 

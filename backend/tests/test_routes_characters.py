@@ -873,7 +873,10 @@ class TestDuplicateCharacter:
         assert body["id"] != original.id
         assert body["user_id"] == original.user_id
         assert body["name"] == "Ranger (복제본)"
-        assert body["data"] == original_data
+        assert body["data"]["inventory"] == original_data["inventory"]
+        assert body["data"]["skills"] == original_data["skills"]
+        assert body["data"]["status_effects"] == original_data["status_effects"]
+        assert any(status["name"] == "Pride" for status in body["data"]["statuses"])
 
     def test_duplicate_character_not_found(self, client):
         """Duplicating a non-existent character returns 404."""
@@ -956,7 +959,10 @@ class TestCharacterShareCode:
         redeemed = redeem_resp.json()["character"]
         assert redeemed["user_id"] == second_user.id
         assert redeemed["name"] == "Source Hero"
-        assert redeemed["data"] == source_data
+        assert redeemed["data"]["inventory"] == source_data["inventory"]
+        assert redeemed["data"]["skills"] == source_data["skills"]
+        assert redeemed["data"]["status_effects"] == source_data["status_effects"]
+        assert any(status["name"] == "Impatient" for status in redeemed["data"]["statuses"])
         assert redeemed["id"] != source_char.id
 
     def test_redeem_share_code_cannot_be_used_twice(self, client, db_session, sample_user, second_user):
@@ -1147,9 +1153,7 @@ class TestStatusEffectsStorage:
         assert effects[1]["name"] == "Poisoned"
         assert effects[1]["modifier"] == -1
 
-    def test_update_preserves_status_effects_when_not_in_data(
-        self, client, db_session, sample_user
-    ):
+    def test_update_preserves_status_effects_when_not_in_data(self, client, db_session, sample_user):
         """Status effects survive an update that does not include them."""
         data = {
             "age": 25,
@@ -1188,9 +1192,7 @@ class TestStatusEffectsStorage:
         assert effects[0]["name"] == "Haste"
         assert effects[0]["modifier"] == 3
 
-    def test_no_status_effects_key_defaults_to_empty_on_update(
-        self, client, db_session, sample_user
-    ):
+    def test_no_status_effects_key_defaults_to_empty_on_update(self, client, db_session, sample_user):
         """If original data lacks status_effects, update sets it to empty list."""
         data = {
             "age": 25,

@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.models import Character, GameSession, SessionParticipant, StoryAct, StoryLog
 from app.schemas import CharacterSheet, GameContext, StoryActInfo, StoryLogEntry
 from app.services.act_resolver import resolve_current_open_act
+from app.services.character_state import normalize_inventory_items, normalize_statuses
 
 logger = logging.getLogger("ai_gm.context_loader")
 
@@ -191,10 +192,7 @@ def _load_story_history(db: Session, session_id: int) -> list[StoryLogEntry]:
     """
     # Query story logs: all entries, ordered by created_at desc
     story_logs_db = (
-        db.query(StoryLog)
-        .filter(StoryLog.session_id == session_id)
-        .order_by(StoryLog.created_at.desc())
-        .all()
+        db.query(StoryLog).filter(StoryLog.session_id == session_id).order_by(StoryLog.created_at.desc()).all()
     )
 
     # Convert to StoryLogEntry objects
@@ -257,6 +255,9 @@ def _character_to_sheet(character: Character) -> CharacterSheet:
             # If effect is a dict, use its name or description
             status_effects.append(effect.get("name") or effect.get("description", "Unknown effect"))
 
+    statuses = normalize_statuses(data)
+    inventory = normalize_inventory_items(data.get("inventory", []))
+
     return CharacterSheet(
         id=character.id,
         name=character.name,
@@ -272,6 +273,8 @@ def _character_to_sheet(character: Character) -> CharacterSheet:
         skills=skills,
         weaknesses=weaknesses,
         status_effects=status_effects,
+        statuses=statuses,
+        inventory=inventory,
     )
 
 
@@ -345,12 +348,7 @@ def get_all_acts(db: Session, session_id: int) -> list[StoryActInfo]:
     Returns:
         list[StoryActInfo]: 모든 막 정보 목록
     """
-    acts = (
-        db.query(StoryAct)
-        .filter(StoryAct.session_id == session_id)
-        .order_by(StoryAct.act_number)
-        .all()
-    )
+    acts = db.query(StoryAct).filter(StoryAct.session_id == session_id).order_by(StoryAct.act_number).all()
 
     return [
         StoryActInfo(
@@ -364,9 +362,7 @@ def get_all_acts(db: Session, session_id: int) -> list[StoryActInfo]:
     ]
 
 
-def load_act_story_history(
-    db: Session, session_id: int, act_id: int
-) -> list[StoryLogEntry]:
+def load_act_story_history(db: Session, session_id: int, act_id: int) -> list[StoryLogEntry]:
     """특정 막에 속하는 스토리 로그를 로드합니다.
 
     Args:
@@ -384,7 +380,4 @@ def load_act_story_history(
         .all()
     )
 
-    return [
-        StoryLogEntry(role=log.role, content=log.content, created_at=log.created_at)
-        for log in logs
-    ]
+    return [StoryLogEntry(role=log.role, content=log.content, created_at=log.created_at) for log in logs]

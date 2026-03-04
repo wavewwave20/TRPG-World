@@ -97,7 +97,7 @@ def _normalize_langsmith_env() -> None:
 
     logger.info(
         "LangSmith tracing normalized: "
-        f"enabled={tracing_enabled}, project={os.getenv('LANGSMITH_PROJECT','') or os.getenv('LANGCHAIN_PROJECT','')}"
+        f"enabled={tracing_enabled}, project={os.getenv('LANGSMITH_PROJECT', '') or os.getenv('LANGCHAIN_PROJECT', '')}"
     )
 
 
@@ -132,10 +132,16 @@ async def on_startup():
     try:
         from app.services.llm_config_resolver import resolve_llm_config
 
-        config = resolve_llm_config()
-        logger.info(f"LLM config resolved: model={config.model_id}, source={config.source}")
+        story_config = resolve_llm_config(purpose="story")
+        judgment_config = resolve_llm_config(purpose="judgment")
+        logger.info(
+            "LLM config resolved: "
+            f"story={story_config.model_id}({story_config.source}), "
+            f"judgment={judgment_config.model_id}({judgment_config.source})"
+        )
     except Exception as e:
         logger.warning(f"Failed to resolve LLM config from DB: {e}")
+
 
 # CORS configuration - configurable via environment variable
 cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")

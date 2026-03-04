@@ -83,6 +83,10 @@ async def check_and_deactivate_session(session_id: int, db: Session, sio=None) -
             {"session_id": session_id, "reason": "no_participants"},
             room=room_name,
         )
+        await sio.emit(
+            "session_catalog_updated",
+            {"reason": "no_participants", "session_id": session_id},
+        )
 
         # 소켓 룸 닫기
         try:
@@ -232,6 +236,10 @@ async def maybe_end_session_if_host(session_id: int | None, user_id: int | None,
             "session_ended",
             {"session_id": session_id, "reason": "host_disconnected"},
             room=room_name,
+        )
+        await sio.emit(
+            "session_catalog_updated",
+            {"reason": "host_disconnected", "session_id": session_id},
         )
 
         try:

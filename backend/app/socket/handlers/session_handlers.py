@@ -6,6 +6,7 @@
 
 from app.database import SessionLocal
 from app.models import Character, GameSession, SessionParticipant
+from app.services.session_activity_logger import log_session_activity
 from app.socket.managers.participant_manager import (
     add_participant,
     get_participants,
@@ -75,6 +76,16 @@ def register_handlers(sio):
                 if session.host_user_id == user_id:
                     cancel_host_grace_timer(session_id)
 
+                existing_participant = (
+                    db.query(SessionParticipant)
+                    .filter(
+                        SessionParticipant.session_id == session_id,
+                        SessionParticipant.user_id == user_id,
+                    )
+                    .first()
+                )
+                reconnected = existing_participant is not None
+
                 # 참가자 추가 (SessionParticipant 레코드 생성/업데이트)
                 add_participant(db, session_id, user_id, character_id)
 
@@ -91,6 +102,21 @@ def register_handlers(sio):
 
                 # 업데이트된 참가자 목록 조회
                 participants = get_participants(db, session_id)
+                log_session_activity(
+                    db,
+                    session_id=session_id,
+                    actor_user_id=user_id,
+                    actor_character_id=character_id,
+                    source="socket",
+                    action_type="session.socket_rejoin" if reconnected else "session.socket_join",
+                    status="success",
+                    message="소켓 세션 재참가" if reconnected else "소켓 세션 참가",
+                    detail={
+                        "participant_count": len(participants),
+                        "reconnected": reconnected,
+                    },
+                )
+                db.commit()
 
                 # user_joined 이벤트 브로드캐스트
                 await sio.emit(
@@ -101,8 +127,18 @@ def register_handlers(sio):
                         "character_name": character_name,
                         "participants": participants,
                         "participant_count": len(participants),
+                        "reconnected": reconnected,
                     },
                     room=room_name,
+                )
+
+                await sio.emit(
+                    "session_participant_count_updated",
+                    {
+                        "session_id": session_id,
+                        "participant_count": len(participants),
+                        "is_active": True,
+                    },
                 )
 
                 logger.info(f"클라이언트 {sid} 세션 {session_id} 참가: 캐릭터={character_name}")
@@ -168,6 +204,17 @@ def register_handlers(sio):
 
                 # 업데이트된 참가자 목록 조회
                 participants = get_participants(db, session_id)
+                log_session_activity(
+                    db,
+                    session_id=session_id,
+                    actor_user_id=user_id,
+                    source="socket",
+                    action_type="session.socket_leave",
+                    status="success",
+                    message="소켓 세션 퇴장",
+                    detail={"participant_count": len(participants)},
+                )
+                db.commit()
 
                 # user_left 이벤트 브로드캐스트
                 await sio.emit(
@@ -186,6 +233,16 @@ def register_handlers(sio):
 
                 # 세션 비활성화 확인
                 await check_and_deactivate_session(session_id, db, sio)
+
+                refreshed = db.query(GameSession).filter(GameSession.id == session_id).first()
+                await sio.emit(
+                    "session_participant_count_updated",
+                    {
+                        "session_id": session_id,
+                        "participant_count": len(participants),
+                        "is_active": bool(refreshed and refreshed.is_active),
+                    },
+                )
 
             finally:
                 db.close()

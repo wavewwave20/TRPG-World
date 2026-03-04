@@ -298,6 +298,23 @@ class TestCalculateModifier:
         result = _calculate_modifier(skilled_character, ActionType.INTELLIGENCE)
         assert result == 1
 
+    def test_combined_with_unified_status_and_inventory(self, base_character):
+        base_character.charisma = 14
+        base_character.statuses = [
+            {"name": "Confident", "modifier": 1, "type": "buff", "duration_type": "scene"},
+        ]
+        base_character.inventory = [
+            {
+                "name": "Noble Signet",
+                "equipped": True,
+                "modifier": 1,
+                "action_modifiers": {"charisma": 2},
+            }
+        ]
+
+        result = _calculate_modifier(base_character, ActionType.CHARISMA)
+        assert result == 6
+
 
 # ===========================================================================
 # _parse_dc_response tests
@@ -309,27 +326,31 @@ class TestParseDcResponse:
 
     def test_valid_json_array(self):
         """A plain JSON array should be parsed correctly."""
-        response = json.dumps([
-            {
-                "character_id": 1,
-                "action_type": "strength",
-                "difficulty": 12,
-                "reasoning": "The door is old and weak.",
-            }
-        ])
+        response = json.dumps(
+            [
+                {
+                    "character_id": 1,
+                    "action_type": "strength",
+                    "difficulty": 12,
+                    "reasoning": "The door is old and weak.",
+                }
+            ]
+        )
         result = _parse_dc_response(response)
         assert result[1]["difficulty"] == 12
         assert result[1]["reasoning"] == "The door is old and weak."
 
     def test_json_wrapped_in_markdown_code_block(self):
         """Response wrapped in ```json ... ``` should be parsed correctly."""
-        inner = json.dumps([
-            {
-                "character_id": 1,
-                "difficulty": 18,
-                "reasoning": "Very hard lock.",
-            }
-        ])
+        inner = json.dumps(
+            [
+                {
+                    "character_id": 1,
+                    "difficulty": 18,
+                    "reasoning": "Very hard lock.",
+                }
+            ]
+        )
         response = f"```json\n{inner}\n```"
         result = _parse_dc_response(response)
         assert result[1]["difficulty"] == 18
@@ -337,13 +358,15 @@ class TestParseDcResponse:
 
     def test_json_wrapped_in_plain_code_block(self):
         """Response wrapped in ``` ... ``` (no language tag) should work."""
-        inner = json.dumps([
-            {
-                "character_id": 3,
-                "difficulty": 10,
-                "reasoning": "Easy task.",
-            }
-        ])
+        inner = json.dumps(
+            [
+                {
+                    "character_id": 3,
+                    "difficulty": 10,
+                    "reasoning": "Easy task.",
+                }
+            ]
+        )
         response = f"```\n{inner}\n```"
         result = _parse_dc_response(response)
         assert result[3]["difficulty"] == 10
@@ -365,10 +388,12 @@ class TestParseDcResponse:
 
     def test_multiple_characters_mapped_by_id(self):
         """Multiple characters should be keyed by character_id."""
-        response = json.dumps([
-            {"character_id": 1, "difficulty": 12, "reasoning": "Reason A"},
-            {"character_id": 2, "difficulty": 20, "reasoning": "Reason B"},
-        ])
+        response = json.dumps(
+            [
+                {"character_id": 1, "difficulty": 12, "reasoning": "Reason A"},
+                {"character_id": 2, "difficulty": 20, "reasoning": "Reason B"},
+            ]
+        )
         result = _parse_dc_response(response)
         assert len(result) == 2
         assert result[1]["difficulty"] == 12
@@ -379,13 +404,15 @@ class TestParseDcResponse:
         When the AI uses 'difficulty_reasoning' instead of 'reasoning',
         the value should still be available under the 'reasoning' key.
         """
-        response = json.dumps([
-            {
-                "character_id": 1,
-                "difficulty": 15,
-                "difficulty_reasoning": "Explained via difficulty_reasoning field.",
-            }
-        ])
+        response = json.dumps(
+            [
+                {
+                    "character_id": 1,
+                    "difficulty": 15,
+                    "difficulty_reasoning": "Explained via difficulty_reasoning field.",
+                }
+            ]
+        )
         result = _parse_dc_response(response)
         assert result[1]["reasoning"] == "Explained via difficulty_reasoning field."
 
@@ -394,31 +421,33 @@ class TestParseDcResponse:
         When both 'reasoning' and 'difficulty_reasoning' are present,
         'reasoning' should take priority (because of `or` short-circuit).
         """
-        response = json.dumps([
-            {
-                "character_id": 1,
-                "difficulty": 15,
-                "reasoning": "Primary reasoning.",
-                "difficulty_reasoning": "Fallback reasoning.",
-            }
-        ])
+        response = json.dumps(
+            [
+                {
+                    "character_id": 1,
+                    "difficulty": 15,
+                    "reasoning": "Primary reasoning.",
+                    "difficulty_reasoning": "Fallback reasoning.",
+                }
+            ]
+        )
         result = _parse_dc_response(response)
         assert result[1]["reasoning"] == "Primary reasoning."
 
     def test_default_difficulty_when_missing(self):
         """If 'difficulty' key is missing, default to 15."""
-        response = json.dumps([
-            {"character_id": 1, "reasoning": "Some reasoning."}
-        ])
+        response = json.dumps([{"character_id": 1, "reasoning": "Some reasoning."}])
         result = _parse_dc_response(response)
         assert result[1]["difficulty"] == 15
 
     def test_entry_without_character_id_skipped(self):
         """Entries missing 'character_id' should be skipped."""
-        response = json.dumps([
-            {"difficulty": 15, "reasoning": "No character ID"},
-            {"character_id": 2, "difficulty": 10, "reasoning": "Valid"},
-        ])
+        response = json.dumps(
+            [
+                {"difficulty": 15, "reasoning": "No character ID"},
+                {"character_id": 2, "difficulty": 10, "reasoning": "Valid"},
+            ]
+        )
         result = _parse_dc_response(response)
         assert len(result) == 1
         assert 2 in result
@@ -426,9 +455,9 @@ class TestParseDcResponse:
     def test_text_before_and_after_json(self):
         """Surrounding text should be stripped, JSON array extracted."""
         response = (
-            'Here is my analysis:\n\n'
+            "Here is my analysis:\n\n"
             '[{"character_id": 1, "difficulty": 14, "reasoning": "Analysis"}]\n\n'
-            'Let me know if you need more details.'
+            "Let me know if you need more details."
         )
         result = _parse_dc_response(response)
         assert result[1]["difficulty"] == 14

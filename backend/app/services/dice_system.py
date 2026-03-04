@@ -5,6 +5,12 @@ from enum import Enum
 
 from app.models import Character
 from app.schemas import JudgmentOutcome
+from app.services.character_state import (
+    inventory_modifier_for_action,
+    normalize_inventory_items,
+    normalize_statuses,
+    status_modifier_for_action,
+)
 
 
 class ActionType(str, Enum):
@@ -23,6 +29,8 @@ def calculate_total_modifier(
     action_type_value: str,
     skills: list,
     status_effects: list,
+    statuses: list | None = None,
+    inventory: list | None = None,
 ) -> int:
     """
     보정치 통합 계산 함수.
@@ -57,6 +65,12 @@ def calculate_total_modifier(
             effect_modifier = effect.get("modifier", 0)
             if isinstance(effect_modifier, int):
                 modifier += effect_modifier
+
+    normalized_statuses = [s for s in (statuses or []) if isinstance(s, dict)]
+    modifier += status_modifier_for_action(normalized_statuses, action_type_value)
+
+    normalized_inventory = [item for item in (inventory or []) if isinstance(item, dict)]
+    modifier += inventory_modifier_for_action(normalized_inventory, action_type_value)
 
     return modifier
 
@@ -163,12 +177,21 @@ class DiceSystem:
         ability_score = DiceSystem.get_ability_score(character, action_type)
         skills = character.data.get("skills", [])
         status_effects = character.data.get("status_effects", [])
+        statuses = normalize_statuses(
+            character.data if isinstance(character.data, dict) else {},
+            include_legacy_status_effects=False,
+        )
+        inventory = normalize_inventory_items(
+            character.data.get("inventory", []) if isinstance(character.data, dict) else []
+        )
 
         return calculate_total_modifier(
             ability_score=ability_score,
             action_type_value=action_type.value,
             skills=skills if isinstance(skills, list) else [],
             status_effects=status_effects if isinstance(status_effects, list) else [],
+            statuses=statuses,
+            inventory=inventory,
         )
 
     @staticmethod

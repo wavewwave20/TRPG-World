@@ -3,11 +3,10 @@
 플레이어 행동 제출, 큐 조회, 수정, 삭제, 재정렬, 커밋 이벤트를 처리합니다.
 """
 
-import os
-
 from app.database import SessionLocal
 from app.models import ActionJudgment, Character, SessionParticipant, StoryLog
 from app.services.act_resolver import resolve_current_open_act
+from app.services.session_activity_logger import log_session_activity
 from app.socket.managers.action_queue_manager import (
     add_action,
     clear_queue,
@@ -139,9 +138,7 @@ def register_handlers(sio):
                     cooldown_actions = max(0, cooldown_actions)
 
                     current_narrative_turn = (
-                        db.query(StoryLog)
-                        .filter(StoryLog.session_id == session_id, StoryLog.role == "AI")
-                        .count()
+                        db.query(StoryLog).filter(StoryLog.session_id == session_id, StoryLog.role == "AI").count()
                     )
 
                     char_data = character.data if isinstance(character.data, dict) else {}
@@ -181,6 +178,22 @@ def register_handlers(sio):
                 # action_submitted 이벤트 브로드캐스트
                 room_name = f"session_{session_id}"
                 queue = get_queue(session_id)
+                log_session_activity(
+                    db,
+                    session_id=session_id,
+                    actor_user_id=player_id,
+                    source="socket",
+                    action_type="action.submit",
+                    status="success",
+                    message="행동 제출",
+                    detail={
+                        "action_id": action.get("id"),
+                        "action_mode": action_mode,
+                        "skill_name": skill_name,
+                        "queue_count": len(queue),
+                    },
+                )
+                db.commit()
                 await sio.emit(
                     "action_submitted",
                     {
@@ -214,7 +227,7 @@ def register_handlers(sio):
             session_id = data.get("session_id")
             queue = get_queue(session_id)
 
-            await sio.emit("queue_data", {"actions": queue}, room=sid)
+            await sio.emit("queue_data", {"session_id": session_id, "actions": queue}, room=sid)
 
             print(f"큐 조회: session={session_id}, count={len(queue)}")
 
@@ -266,7 +279,7 @@ def register_handlers(sio):
             # queue_updated 이벤트 브로드캐스트
             room_name = f"session_{session_id}"
             queue = get_queue(session_id)
-            await sio.emit("queue_updated", {"actions": queue}, room=room_name)
+            await sio.emit("queue_updated", {"session_id": session_id, "actions": queue}, room=room_name)
 
             print(f"액션 수정: session={session_id}, action_id={action_id}")
 
@@ -311,7 +324,7 @@ def register_handlers(sio):
             # queue_updated 이벤트 브로드캐스트
             room_name = f"session_{session_id}"
             queue = get_queue(session_id)
-            await sio.emit("queue_updated", {"actions": queue}, room=room_name)
+            await sio.emit("queue_updated", {"session_id": session_id, "actions": queue}, room=room_name)
 
             print(f"액션 재정렬: session={session_id}, new_order={action_ids}")
 
@@ -358,7 +371,7 @@ def register_handlers(sio):
             queue = get_queue(session_id)
             await sio.emit(
                 "queue_updated",
-                {"actions": queue, "queue_count": len(queue)},
+                {"session_id": session_id, "actions": queue, "queue_count": len(queue)},
                 room=room_name,
             )
 
@@ -410,9 +423,7 @@ def register_handlers(sio):
 
                 # 스킬 쿨타임 적용: submit 시점이 아니라 commit 시점에 확정
                 current_narrative_turn = (
-                    db.query(StoryLog)
-                    .filter(StoryLog.session_id == session_id, StoryLog.role == "AI")
-                    .count()
+                    db.query(StoryLog).filter(StoryLog.session_id == session_id, StoryLog.role == "AI").count()
                 )
                 for action in actions:
                     if action.get("action_mode") != "skill" or not action.get("skill_name"):
@@ -490,6 +501,20 @@ def register_handlers(sio):
                 db.add(story_entry)
                 db.commit()
                 db.refresh(story_entry)
+                log_session_activity(
+                    db,
+                    session_id=session_id,
+                    actor_user_id=user_id,
+                    source="socket",
+                    action_type="action.commit",
+                    status="success",
+                    message="행동 커밋",
+                    detail={
+                        "story_log_id": story_entry.id,
+                        "action_count": len(actions),
+                    },
+                )
+                db.commit()
 
                 # story_committed 이벤트 브로드캐스트
                 room_name = f"session_{session_id}"
@@ -508,7 +533,11 @@ def register_handlers(sio):
                 )
 
                 # queue_updated 이벤트 (큐 비움)
-                await sio.emit("queue_updated", {"actions": [], "queue_count": 0}, room=room_name)
+                await sio.emit(
+                    "queue_updated",
+                    {"session_id": session_id, "actions": [], "queue_count": 0},
+                    room=room_name,
+                )
 
                 logger.info(f"행동 커밋: 세션={session_id}, 행동 수={len(actions)}")
 
@@ -594,10 +623,14 @@ def register_handlers(sio):
                         raise ValueError(f"캐릭터에 매핑된 행동이 없습니다. Actions: {actions}")
 
                     # AI GM 서비스 초기화
-                    from app.services.llm_config_resolver import get_active_llm_model
+                    from app.services.llm_config_resolver import get_active_llm_models
 
-                    llm_model = get_active_llm_model()
-                    ai_service = AIGMServiceV2(db=db, llm_model=llm_model)
+                    model_config = get_active_llm_models()
+                    ai_service = AIGMServiceV2(
+                        db=db,
+                        llm_model=model_config["story"],
+                        judgment_model=model_config["judgment"],
+                    )
 
                     # Phase 1: 행동 분석 및 DC 결정
                     analyses = await ai_service.analyze_actions(session_id=session_id, player_actions=player_actions)
@@ -719,6 +752,17 @@ def register_handlers(sio):
                 except Exception as ai_error:
                     # AI 생성 에러는 호스트에게만 전송
                     print(f"AI 생성 에러: {ai_error}")
+                    log_session_activity(
+                        db,
+                        session_id=session_id,
+                        actor_user_id=user_id,
+                        source="socket",
+                        action_type="action.commit.ai_error",
+                        status="failed",
+                        message="행동 커밋 후 AI 처리 실패",
+                        detail={"error": str(ai_error)},
+                    )
+                    db.commit()
                     await sio.emit(
                         "ai_generation_error",
                         {"session_id": session_id, "error": str(ai_error)},

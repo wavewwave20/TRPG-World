@@ -6,6 +6,7 @@ Phase 1: 행동 판정 노드
 
 import json
 import logging
+from collections.abc import Sequence
 from typing import Any
 
 from langchain_core.prompts import ChatPromptTemplate
@@ -53,7 +54,7 @@ async def analyze_and_judge_actions(
     player_actions: list[PlayerAction],
     characters: list[CharacterSheet],
     world_context: str,
-    story_history: list[str],
+    story_history: Sequence[object],
     llm_model: str = "gemini/gemini-3-pro-preview",
     ai_summary: str | None = None,
 ) -> list[ActionAnalysis]:
@@ -106,7 +107,7 @@ async def analyze_and_judge_actions(
             skill_description=action.skill_description,
             modifier=modifier,
             difficulty=7,  # 기본값(표준 행동 구간), AI가 최종 결정
-            difficulty_reasoning="", 
+            difficulty_reasoning="",
         )
         analyses.append(analysis)
 
@@ -130,18 +131,31 @@ async def analyze_and_judge_actions(
         for analysis in analyses:
             dc_info = dc_results.get(analysis.character_id, {})
             analysis.difficulty = dc_info.get("difficulty", 15)
-            analysis.difficulty_reasoning = dc_info.get("reasoning", "현재 상황 정보가 제한적이라 보수적으로 난이도를 책정했다.")
+            analysis.difficulty_reasoning = dc_info.get(
+                "reasoning", "현재 상황 정보가 제한적이라 보수적으로 난이도를 책정했다."
+            )
 
             # requires_roll을 명시적 bool로 변환
             raw_requires_roll = dc_info.get("requires_roll", True)
-            analysis.requires_roll = bool(raw_requires_roll) if not isinstance(raw_requires_roll, str) else raw_requires_roll.lower() not in ("false", "0", "no")
+            analysis.requires_roll = (
+                bool(raw_requires_roll)
+                if not isinstance(raw_requires_roll, str)
+                else raw_requires_roll.lower() not in ("false", "0", "no")
+            )
 
             # AI가 제안한 action_type으로 능력치 업데이트
             ai_action_type_str = dc_info.get("action_type", "")
             if ai_action_type_str and ai_action_type_str in action_type_value_map:
                 ai_action_type = action_type_value_map[ai_action_type_str]
                 # 스킬행동은 입력된 action_type을 고정값으로 취급
-                action_input = next((pa for pa in player_actions if pa.character_id == analysis.character_id and pa.action_text == analysis.action_text), None)
+                action_input = next(
+                    (
+                        pa
+                        for pa in player_actions
+                        if pa.character_id == analysis.character_id and pa.action_text == analysis.action_text
+                    ),
+                    None,
+                )
                 locked = bool(action_input.action_type_locked) if action_input else False
 
                 if ai_action_type != analysis.action_type and not locked:
@@ -174,7 +188,9 @@ async def analyze_and_judge_actions(
                         f"(modifier={analysis.modifier:+d})"
                     )
 
-                logger.info(f"Character {analysis.character_id}: DC={analysis.difficulty}, modifier={analysis.modifier:+d}")
+                logger.info(
+                    f"Character {analysis.character_id}: DC={analysis.difficulty}, modifier={analysis.modifier:+d}"
+                )
             else:
                 # 자동 성공: difficulty = 0
                 analysis.difficulty = 0
@@ -219,6 +235,8 @@ def _calculate_modifier(character: CharacterSheet, action_type: ActionType) -> i
         action_type_value=action_type.value,
         skills=character.skills,
         status_effects=character.status_effects,
+        statuses=character.statuses,
+        inventory=character.inventory,
     )
 
 
@@ -226,7 +244,7 @@ async def _determine_difficulty_with_ai(
     player_actions: list[PlayerAction],
     characters: list[CharacterSheet],
     world_context: str,
-    story_history: list[str],
+    story_history: Sequence[object],
     llm_model: str,
     ai_summary: str | None = None,
 ) -> dict[int, dict[str, Any]]:
@@ -267,7 +285,7 @@ async def _determine_difficulty_with_ai(
     char_info_list = []
     for char in characters:
         skill_texts = []
-        for s in (char.skills or []):
+        for s in char.skills or []:
             if not isinstance(s, dict):
                 continue
             s_name = s.get("name", "이름없음")
@@ -276,11 +294,39 @@ async def _determine_difficulty_with_ai(
             skill_texts.append(f"{s_name}({s_type}, {s_ability})")
         skills_line = ", ".join(skill_texts) if skill_texts else "없음"
 
+        status_texts = []
+        for status in char.statuses or []:
+            if not isinstance(status, dict):
+                continue
+            status_name = str(status.get("name") or "").strip()
+            if not status_name:
+                continue
+            status_type = str(status.get("type") or "debuff")
+            modifier = status.get("modifier", 0)
+            modifier_text = f"{modifier:+d}" if isinstance(modifier, int) and modifier != 0 else "0"
+            status_texts.append(f"{status_name}({status_type}, mod {modifier_text})")
+        statuses_line = ", ".join(status_texts) if status_texts else "없음"
+
+        inventory_texts = []
+        for item in char.inventory or []:
+            if not isinstance(item, dict):
+                continue
+            item_name = str(item.get("name") or "").strip()
+            if not item_name:
+                continue
+            quantity = item.get("quantity", 1)
+            equipped = bool(item.get("equipped", False))
+            equipped_text = "장착" if equipped else "비장착"
+            inventory_texts.append(f"{item_name} x{quantity} ({equipped_text})")
+        inventory_line = ", ".join(inventory_texts) if inventory_texts else "없음"
+
         char_info = (
             f"- **{char.name}** (ID: {char.id})\n"
             f"  - 근력: {char.strength}, 민첩: {char.dexterity}, 건강: {char.constitution}\n"
             f"  - 지능: {char.intelligence}, 지혜: {char.wisdom}, 매력: {char.charisma}\n"
-            f"  - 보유 스킬: {skills_line}"
+            f"  - 보유 스킬: {skills_line}\n"
+            f"  - 상태: {statuses_line}\n"
+            f"  - 인벤토리: {inventory_line}"
         )
         char_info_list.append(char_info)
     context_parts.append("## 캐릭터 정보\n\n" + "\n".join(char_info_list))
@@ -308,9 +354,7 @@ async def _determine_difficulty_with_ai(
         else:
             mode_line = "일반행동"
             action_text = (
-                f"{i}. **캐릭터 ID {action.character_id}**\n"
-                f"   행동: {action.action_text}\n"
-                f"   행동 모드: {mode_line}"
+                f"{i}. **캐릭터 ID {action.character_id}**\n   행동: {action.action_text}\n   행동 모드: {mode_line}"
             )
 
         action_list.append(action_text)
@@ -318,8 +362,7 @@ async def _determine_difficulty_with_ai(
         "## 분석할 행동\n\n"
         "규칙:\n"
         "- 일반행동: 행동 유형 참고값을 제공하지 않습니다. 행동 의미를 보고 최종 action_type을 판정하세요.\n"
-        "- 스킬행동: 고정 행동 유형을 유지하세요.\n\n"
-        + "\n\n".join(action_list)
+        "- 스킬행동: 고정 행동 유형을 유지하세요.\n\n" + "\n\n".join(action_list)
     )
 
     context_text = "\n\n".join(context_parts)

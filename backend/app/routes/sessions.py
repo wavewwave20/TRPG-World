@@ -14,10 +14,12 @@ from app.models import (
     CharacterGrowthLog,
     DiceRollState,
     GameSession,
+    SessionActivityLog,
     SessionParticipant,
     StoryAct,
     StoryLog,
 )
+from app.services.session_activity_logger import log_session_activity
 from app.socket_server import sio
 from app.utils.backups import backup_session
 from app.utils.timezone import to_kst_iso
@@ -73,6 +75,27 @@ class SessionListItem(BaseModel):
     is_active: bool | None = None
 
     model_config = {"from_attributes": True}
+
+
+class SessionActivityLogItem(BaseModel):
+    id: int
+    session_id: int
+    actor_user_id: int | None = None
+    actor_character_id: int | None = None
+    source: str
+    action_type: str
+    status: str
+    message: str | None = None
+    detail: dict | None = None
+    created_at: str
+
+
+def _assert_host_access(session: GameSession | None, user_id: int) -> GameSession:
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.host_user_id != user_id:
+        raise HTTPException(status_code=403, detail="Only the host can access session activity")
+    return session
 
 
 @router.get("/", response_model=list[SessionListItem])
@@ -149,8 +172,34 @@ async def create_session(session_data: SessionCreate, db: Session = Depends(get_
 
         # Insert into database
         db.add(new_session)
+        db.flush()
+        log_session_activity(
+            db,
+            session_id=new_session.id,
+            actor_user_id=session_data.host_user_id,
+            source="api",
+            action_type="session.create",
+            status="success",
+            message="세션 생성",
+            detail={
+                "title": new_session.title,
+            },
+            dedupe_key=f"session-create:{new_session.id}",
+        )
         db.commit()
         db.refresh(new_session)
+
+        try:
+            await sio.emit(
+                "session_catalog_updated",
+                {
+                    "reason": "created",
+                    "session_id": new_session.id,
+                },
+            )
+        except Exception:
+            # 카탈로그 실시간 업데이트 실패는 API 성공을 막지 않습니다.
+            pass
 
         # Return session ID (Requirement 4.3)
         return SessionResponse(session_id=new_session.id)
@@ -209,6 +258,17 @@ def join_session(session_id: int, join_data: SessionJoinRequest, db: Session = D
             # Rejoin should be idempotent: refresh joined_at and allow character switch.
             existing.character_id = join_data.character_id
             existing.joined_at = datetime.utcnow()
+            log_session_activity(
+                db,
+                session_id=session_id,
+                actor_user_id=join_data.user_id,
+                actor_character_id=join_data.character_id,
+                source="api",
+                action_type="session.join",
+                status="success",
+                message="세션 재참가",
+                detail={"rejoined": True, "character_name": character.name},
+            )
             db.commit()
             return {
                 "message": "Successfully rejoined session",
@@ -224,6 +284,17 @@ def join_session(session_id: int, join_data: SessionJoinRequest, db: Session = D
                 character_id=join_data.character_id,
                 joined_at=datetime.utcnow(),
             )
+        )
+        log_session_activity(
+            db,
+            session_id=session_id,
+            actor_user_id=join_data.user_id,
+            actor_character_id=join_data.character_id,
+            source="api",
+            action_type="session.join",
+            status="success",
+            message="세션 참가",
+            detail={"rejoined": False, "character_name": character.name},
         )
         db.commit()
 
@@ -258,6 +329,16 @@ def leave_session(session_id: int, user_id: int, db: Session = Depends(get_db)):
     )
 
     if participant:
+        log_session_activity(
+            db,
+            session_id=session_id,
+            actor_user_id=user_id,
+            actor_character_id=participant.character_id,
+            source="api",
+            action_type="session.leave",
+            status="success",
+            message="세션 퇴장",
+        )
         db.delete(participant)
         db.commit()
 
@@ -312,6 +393,48 @@ def list_host_sessions(host_user_id: int, db: Session = Depends(get_db)):
     ]
 
 
+@router.get("/{session_id}/activity-logs", response_model=list[SessionActivityLogItem])
+def list_session_activity_logs(
+    session_id: int,
+    user_id: int,
+    limit: int = 200,
+    before_id: int | None = None,
+    action_type: str | None = None,
+    db: Session = Depends(get_db),
+):
+    session = db.query(GameSession).filter(GameSession.id == session_id).first()
+    _assert_host_access(session, user_id)
+
+    normalized_limit = max(1, min(limit, 500))
+
+    query = db.query(SessionActivityLog).filter(SessionActivityLog.session_id == session_id)
+    if before_id is not None:
+        query = query.filter(SessionActivityLog.id < before_id)
+    if action_type:
+        query = query.filter(SessionActivityLog.action_type == action_type.strip())
+
+    rows = (
+        query.order_by(SessionActivityLog.id.desc())
+        .limit(normalized_limit)
+        .all()
+    )
+    return [
+        SessionActivityLogItem(
+            id=row.id,
+            session_id=row.session_id,
+            actor_user_id=row.actor_user_id,
+            actor_character_id=row.actor_character_id,
+            source=row.source,
+            action_type=row.action_type,
+            status=row.status,
+            message=row.message,
+            detail=row.detail if isinstance(row.detail, dict) else None,
+            created_at=to_kst_iso(row.created_at),
+        )
+        for row in rows
+    ]
+
+
 @router.post("/{session_id}/end", status_code=200)
 async def end_session(session_id: int, user_id: int, db: Session = Depends(get_db)):
     """End a session (host only): mark inactive and remove participants."""
@@ -322,12 +445,27 @@ async def end_session(session_id: int, user_id: int, db: Session = Depends(get_d
         raise HTTPException(status_code=403, detail="Only the host can end the session")
     session.is_active = False
     # Backup story logs automatically before clearing participants
+    backup_error: str | None = None
     try:
         backup_session(session_id)
     except Exception as e:
         # Non-fatal: proceed even if backup fails
+        backup_error = str(e)
         print(f"Backup failed for session {session_id}: {e}")
-    db.query(SessionParticipant).filter(SessionParticipant.session_id == session_id).delete()
+    removed_participants = db.query(SessionParticipant).filter(SessionParticipant.session_id == session_id).delete()
+    log_session_activity(
+        db,
+        session_id=session_id,
+        actor_user_id=user_id,
+        source="api",
+        action_type="session.end",
+        status="success",
+        message="세션 종료",
+        detail={
+            "participant_removed_count": removed_participants,
+            "backup_error": backup_error,
+        },
+    )
     db.commit()
 
     # Notify all clients in the room and close it
@@ -335,6 +473,13 @@ async def end_session(session_id: int, user_id: int, db: Session = Depends(get_d
     try:
         await sio.emit("session_ended", {"session_id": session_id, "reason": "host_ended"}, room=room_name)
         await sio.close_room(room_name)
+        await sio.emit(
+            "session_catalog_updated",
+            {
+                "reason": "ended",
+                "session_id": session_id,
+            },
+        )
     except Exception as e:
         print(f"Failed to broadcast/close room for session {session_id}: {e}")
 
@@ -342,7 +487,7 @@ async def end_session(session_id: int, user_id: int, db: Session = Depends(get_d
 
 
 @router.post("/{session_id}/restart", status_code=200)
-def restart_session(session_id: int, user_id: int, db: Session = Depends(get_db)):
+async def restart_session(session_id: int, user_id: int, db: Session = Depends(get_db)):
     """Restart a previously ended session (host only): mark active again."""
     session = db.query(GameSession).filter(GameSession.id == session_id).first()
     if not session:
@@ -350,7 +495,29 @@ def restart_session(session_id: int, user_id: int, db: Session = Depends(get_db)
     if session.host_user_id != user_id:
         raise HTTPException(status_code=403, detail="Only the host can restart the session")
     session.is_active = True
+    log_session_activity(
+        db,
+        session_id=session_id,
+        actor_user_id=user_id,
+        source="api",
+        action_type="session.restart",
+        status="success",
+        message="세션 재시작",
+    )
     db.commit()
+
+    try:
+        await sio.emit(
+            "session_catalog_updated",
+            {
+                "reason": "restarted",
+                "session_id": session_id,
+            },
+        )
+    except Exception:
+        # 카탈로그 이벤트 실패는 재시작 결과에 영향 주지 않음
+        pass
+
     return {"message": "Session restarted"}
 
 
@@ -383,6 +550,16 @@ def update_session(
 
     session.title = title
     session.world_prompt = world_prompt
+    log_session_activity(
+        db,
+        session_id=session_id,
+        actor_user_id=user_id,
+        source="api",
+        action_type="session.update",
+        status="success",
+        message="세션/프롬프트 수정",
+        detail={"title": title},
+    )
     db.commit()
     return {"message": "Session updated"}
 
@@ -510,6 +687,27 @@ def duplicate_session(session_id: int, user_id: int, db: Session = Depends(get_d
                 )
             )
 
+        log_session_activity(
+            db,
+            session_id=source.id,
+            actor_user_id=user_id,
+            source="api",
+            action_type="session.duplicate",
+            status="success",
+            message="세션 복제",
+            detail={"new_session_id": cloned.id},
+        )
+        log_session_activity(
+            db,
+            session_id=cloned.id,
+            actor_user_id=user_id,
+            source="api",
+            action_type="session.duplicate_created",
+            status="success",
+            message="복제 세션 생성",
+            detail={"source_session_id": source.id},
+            dedupe_key=f"dup-created:{source.id}:{cloned.id}",
+        )
         db.commit()
         return SessionDuplicateResponse(session_id=cloned.id, message="Session duplicated")
     except Exception as e:
@@ -543,6 +741,7 @@ def delete_session(session_id: int, user_id: int, db: Session = Depends(get_db))
         )
         db.query(StoryAct).filter(StoryAct.session_id == session_id).delete()
         db.query(StoryLog).filter(StoryLog.session_id == session_id).delete()
+        db.query(SessionActivityLog).filter(SessionActivityLog.session_id == session_id).delete()
         # Remove the session
         db.delete(session)
         db.commit()

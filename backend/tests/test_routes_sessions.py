@@ -10,7 +10,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
-from app.models import Character, GameSession, SessionParticipant, User
+from app.models import Character, GameSession, SessionActivityLog, SessionParticipant, User
 from app.routes.sessions import router
 
 TEST_DATABASE_URL = "sqlite:///:memory:"
@@ -180,3 +180,44 @@ def test_join_session_rejects_inactive_session(client, db_session):
 
     assert response.status_code == 400
     assert response.json()["detail"] == "세션이 종료되었습니다."
+
+
+def test_restart_session_writes_activity_log_and_can_be_listed(client, db_session):
+    host = _create_user(db_session, "host_for_restart_log")
+    session = _create_session(db_session, host_user_id=host.id, is_active=False)
+
+    restart_response = client.post(f"/api/sessions/{session.id}/restart?user_id={host.id}")
+    assert restart_response.status_code == 200
+
+    log_row = (
+        db_session.query(SessionActivityLog)
+        .filter(
+            SessionActivityLog.session_id == session.id,
+            SessionActivityLog.action_type == "session.restart",
+        )
+        .order_by(SessionActivityLog.id.desc())
+        .first()
+    )
+    assert log_row is not None
+    assert log_row.status == "success"
+
+    list_response = client.get(f"/api/sessions/{session.id}/activity-logs?user_id={host.id}&limit=20")
+    assert list_response.status_code == 200
+    logs = list_response.json()
+    assert any(log["action_type"] == "session.restart" for log in logs)
+
+
+def test_activity_logs_are_host_only(client, db_session):
+    host = _create_user(db_session, "host_for_activity_scope")
+    outsider = _create_user(db_session, "outsider_for_activity_scope")
+    character = _create_character(db_session, host, "Scope Hero")
+    session = _create_session(db_session, host_user_id=host.id, is_active=True)
+
+    join_response = client.post(
+        f"/api/sessions/{session.id}/join",
+        json={"user_id": host.id, "character_id": character.id},
+    )
+    assert join_response.status_code == 200
+
+    forbidden = client.get(f"/api/sessions/{session.id}/activity-logs?user_id={outsider.id}&limit=20")
+    assert forbidden.status_code == 403

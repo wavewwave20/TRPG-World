@@ -6,6 +6,7 @@ Phase 3: 서술 생성 노드
 
 import logging
 import re
+from collections.abc import Sequence
 from typing import AsyncIterator
 
 from langchain_core.prompts import ChatPromptTemplate
@@ -49,7 +50,7 @@ def _format_story_entry(entry: object) -> str:
     return str(entry)
 
 
-def _extract_skill_names(skills: list[object], skill_type: str | None = None) -> list[str]:
+def _extract_skill_names(skills: Sequence[object], skill_type: str | None = None) -> list[str]:
     """스킬 목록에서 이름을 추출합니다.
 
     Args:
@@ -70,7 +71,7 @@ def _extract_skill_names(skills: list[object], skill_type: str | None = None) ->
     return names
 
 
-def _extract_weakness_names(weaknesses: list[object]) -> list[str]:
+def _extract_weakness_names(weaknesses: Sequence[object]) -> list[str]:
     """약점 목록을 사람이 읽기 좋은 문자열로 변환합니다."""
     result: list[str] = []
     for weakness in weaknesses or []:
@@ -80,15 +81,11 @@ def _extract_weakness_names(weaknesses: list[object]) -> list[str]:
         if isinstance(weakness, dict):
             name = weakness.get("name") or weakness.get("description")
             if isinstance(name, str) and name.strip():
-                mitigation = weakness.get("mitigation")
-                if isinstance(mitigation, int) and mitigation > 0:
-                    result.append(f"{name.strip()} (완화 {mitigation}/3)")
-                else:
-                    result.append(name.strip())
+                result.append(name.strip())
     return result
 
 
-def _extract_status_effect_names(status_effects: list[object]) -> list[str]:
+def _extract_status_effect_names(status_effects: Sequence[object]) -> list[str]:
     """상태 효과 목록에서 이름을 추출합니다."""
     result: list[str] = []
     for effect in status_effects or []:
@@ -117,7 +114,7 @@ def _format_character_context(characters: list[CharacterSheet]) -> str:
             char_info += f"\n  - 패시브: {', '.join(passive_skills)}"
 
         active_skills = []
-        for s in (char.skills or []):
+        for s in char.skills or []:
             if not isinstance(s, dict):
                 continue
             if str(s.get("type", "")).lower() != "active":
@@ -139,6 +136,33 @@ def _format_character_context(characters: list[CharacterSheet]) -> str:
         if status_names:
             char_info += f"\n  - 상태 효과: {', '.join(status_names)}"
 
+        typed_statuses = []
+        for status in char.statuses or []:
+            if not isinstance(status, dict):
+                continue
+            status_name = status.get("name")
+            if not isinstance(status_name, str) or not status_name.strip():
+                continue
+            status_type = status.get("type") or "debuff"
+            modifier = status.get("modifier", 0)
+            modifier_text = f"{modifier:+d}" if isinstance(modifier, int) and modifier != 0 else "0"
+            typed_statuses.append(f"{status_name.strip()}({status_type}, mod {modifier_text})")
+        if typed_statuses:
+            char_info += f"\n  - 통합 상태: {', '.join(typed_statuses)}"
+
+        inventory_lines = []
+        for item in char.inventory or []:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            quantity = item.get("quantity", 1)
+            equipped = bool(item.get("equipped", False))
+            inventory_lines.append(f"{name.strip()} x{quantity}{' [장착]' if equipped else ''}")
+        if inventory_lines:
+            char_info += f"\n  - 인벤토리: {', '.join(inventory_lines)}"
+
         lines.append(char_info)
 
     return "\n".join(lines)
@@ -148,7 +172,7 @@ async def generate_narrative(
     judgments: list[JudgmentResult],
     characters: list[CharacterSheet],
     world_context: str,
-    story_history: list[str],
+    story_history: Sequence[object],
     llm_model: str = "gpt-4o",
     act_context: str | None = None,
     ai_summary: str | None = None,
@@ -311,7 +335,7 @@ async def generate_narrative_streaming(
     judgments: list[JudgmentResult],
     characters: list[CharacterSheet],
     world_context: str,
-    story_history: list[str],
+    story_history: Sequence[object],
     llm_model: str = "gemini/gemini-3-pro-preview",
     act_context: str | None = None,
     ai_summary: str | None = None,

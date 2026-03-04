@@ -19,12 +19,14 @@ from app.models import (
     StoryLog,
 )
 from app.services.llm_config_resolver import get_active_llm_model, get_active_llm_models
+from app.services.session_activity_logger import log_session_activity
 from app.services.story_director import get_story_director_service
 from app.socket.managers.presence_manager import session_presence
 from app.socket.server import logger
 
 # Guard against duplicate narrative stream requests for the same session.
 _narrative_stream_in_progress: set[int] = set()
+_act_transition_in_progress: set[int] = set()
 
 
 def _coerce_requires_roll(value) -> bool:
@@ -195,6 +197,20 @@ async def _create_act_1(session_id, world_prompt, narrative_text, story_log_id, 
 
 async def _check_act_transition_after_narrative(session_id, db, room_name, sio):
     """Phase 3 서술 완료 후 막 전환을 체크합니다. (레거시 - 비스트리밍 폴백용)"""
+    if session_id in _act_transition_in_progress:
+        logger.info(f"세션 {session_id}: 막 전환 처리 중복 요청 스킵")
+        log_session_activity(
+            db,
+            session_id=session_id,
+            source="socket",
+            action_type="act.transition.skipped",
+            status="skipped",
+            message="막 전환 중복 요청 스킵",
+        )
+        db.commit()
+        return
+
+    _act_transition_in_progress.add(session_id)
     try:
         model_config = get_active_llm_models()
 
@@ -259,9 +275,26 @@ async def _check_act_transition_after_narrative(session_id, db, room_name, sio):
             f"'{result.completed_act.title}' → '{result.new_act.title}', "
             f"성장 보상 {len(result.growth_rewards)}개"
         )
+        log_session_activity(
+            db,
+            session_id=session_id,
+            source="socket",
+            action_type="act.transition.broadcast",
+            status="success",
+            message="막 전환 브로드캐스트 완료",
+            detail={
+                "completed_act_id": result.completed_act.id,
+                "new_act_id": result.new_act.id,
+                "reward_count": len(result.growth_rewards),
+            },
+            dedupe_key=f"act-transition-broadcast:{result.completed_act.id}",
+        )
+        db.commit()
 
     except Exception as e:
         logger.error(f"막 전환 체크 실패: {e}", exc_info=True)
+    finally:
+        _act_transition_in_progress.discard(session_id)
 
 
 async def _handle_act_transition_from_metadata(session_id, metadata, db, room_name, sio):
@@ -287,6 +320,20 @@ async def _handle_act_transition_from_metadata(session_id, metadata, db, room_na
         logger.warning(f"세션 {session_id}: act_transition=true이지만 제목 없음, 스킵")
         return
 
+    if session_id in _act_transition_in_progress:
+        logger.info(f"세션 {session_id}: 메타데이터 막 전환 중복 요청 스킵")
+        log_session_activity(
+            db,
+            session_id=session_id,
+            source="socket",
+            action_type="act.transition.skipped",
+            status="skipped",
+            message="메타데이터 막 전환 중복 요청 스킵",
+        )
+        db.commit()
+        return
+
+    _act_transition_in_progress.add(session_id)
     try:
         model_config = get_active_llm_models()
 
@@ -356,9 +403,26 @@ async def _handle_act_transition_from_metadata(session_id, metadata, db, room_na
             f"'{result.completed_act.title}' → '{result.new_act.title}', "
             f"성장 보상 {len(result.growth_rewards)}개"
         )
+        log_session_activity(
+            db,
+            session_id=session_id,
+            source="socket",
+            action_type="act.transition.broadcast",
+            status="success",
+            message="메타데이터 막 전환 브로드캐스트 완료",
+            detail={
+                "completed_act_id": result.completed_act.id,
+                "new_act_id": result.new_act.id,
+                "reward_count": len(result.growth_rewards),
+            },
+            dedupe_key=f"act-transition-broadcast:{result.completed_act.id}",
+        )
+        db.commit()
 
     except Exception as e:
         logger.error(f"메타데이터 기반 막 전환 실패: {e}", exc_info=True)
+    finally:
+        _act_transition_in_progress.discard(session_id)
 
 
 async def _promote_pending_judgments_to_phase2(session_id: int, db, room_name: str, sio) -> int:
@@ -534,6 +598,24 @@ async def _replay_growth_rewards_for_display_start(session_id: int, db, room_nam
             room=room_name,
             skip_sid=trigger_sid,
         )
+
+    trigger_presence = session_presence.get(trigger_sid) or {}
+    actor_user_id = trigger_presence.get("user_id")
+    log_session_activity(
+        db,
+        session_id=session_id,
+        actor_user_id=actor_user_id if isinstance(actor_user_id, int) else None,
+        source="socket",
+        action_type="reward.replay_for_transition_display",
+        status="success",
+        message="막 전환 연출 시작 시 보상 재동기화",
+        detail={
+            "completed_act_id": completed_act.id,
+            "reward_count": len(growth_logs),
+            "character_ids": character_ids,
+        },
+    )
+    db.commit()
 
 
 def register_handlers(sio):
@@ -1505,6 +1587,20 @@ def register_handlers(sio):
                         },
                         room=room_name,
                     )
+                if refreshed_character_ids:
+                    log_session_activity(
+                        db,
+                        session_id=session_id,
+                        source="socket",
+                        action_type="character.state_sync_emitted",
+                        status="success",
+                        message="서술 완료 후 캐릭터 상태 동기화 이벤트 전송",
+                        detail={
+                            "reason": "post_narrative_sync",
+                            "character_ids": refreshed_character_ids,
+                        },
+                    )
+                    db.commit()
 
                 logger.info(f"이야기 스트림 완료: 세션={session_id}")
 
@@ -1705,6 +1801,20 @@ async def _trigger_story_generation_internal(session_id: int, db, room_name: str
                 },
                 room=room_name,
             )
+        if refreshed_character_ids:
+            log_session_activity(
+                db,
+                session_id=session_id,
+                source="socket",
+                action_type="character.state_sync_emitted",
+                status="success",
+                message="스토리 생성 완료 후 캐릭터 상태 동기화 이벤트 전송",
+                detail={
+                    "reason": "post_narrative_sync",
+                    "character_ids": refreshed_character_ids,
+                },
+            )
+            db.commit()
 
         logger.info(f"Phase 3 완료: 세션={session_id}, 이야기 길이={len(narrative)}")
 

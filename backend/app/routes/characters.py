@@ -11,9 +11,99 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Character, CharacterShareCode, User
+from app.services.character_state import consume_inventory_item, normalize_inventory_items, normalize_statuses
 
 router = APIRouter(prefix="/api/characters", tags=["characters"])
 SHARE_CODE_EXPIRE_MINUTES = 3
+
+
+def _normalize_legacy_weaknesses(weaknesses: list[str] | None) -> list[dict[str, Any]]:
+    if not weaknesses:
+        return []
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in weaknesses:
+        name = str(raw or "").strip()
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(
+            {
+                "name": name,
+                "category": "mental",
+                "type": "debuff",
+                "modifier": -1,
+                "source": "legacy_weakness",
+            }
+        )
+    return normalized
+
+
+def _build_character_data(
+    *,
+    age: int,
+    race: str,
+    concept: str,
+    strength: int,
+    dexterity: int,
+    constitution: int,
+    intelligence: int,
+    wisdom: int,
+    charisma: int,
+    skills: list[dict[str, Any]],
+    statuses: list[dict[str, Any] | str] | None,
+    weaknesses: list[str] | None,
+    inventory: list[dict[str, Any] | str] | None,
+    status_effects: list[Any] | None,
+    sync_status_effects: bool,
+) -> dict[str, Any]:
+    raw_inventory = inventory or []
+    normalized_inventory = normalize_inventory_items(raw_inventory)
+    seeded_statuses = statuses or []
+    if not seeded_statuses and weaknesses:
+        seeded_statuses = _normalize_legacy_weaknesses(weaknesses)
+
+    data = {
+        "age": age,
+        "race": race,
+        "concept": concept,
+        "strength": strength,
+        "dexterity": dexterity,
+        "constitution": constitution,
+        "intelligence": intelligence,
+        "wisdom": wisdom,
+        "charisma": charisma,
+        "skills": skills,
+        "weaknesses": weaknesses or [],
+        "inventory": raw_inventory,
+        "statuses": seeded_statuses,
+        "status_effects": status_effects or [],
+    }
+
+    status_seed_data = dict(data)
+    status_seed_data["inventory"] = normalized_inventory
+    normalized_statuses = normalize_statuses(status_seed_data, include_legacy_status_effects=True)
+    data["statuses"] = normalized_statuses
+    if sync_status_effects:
+        data["status_effects"] = normalized_statuses
+    return data
+
+
+def _normalize_character_data_for_response(data: dict[str, Any] | None) -> dict[str, Any]:
+    payload = deepcopy(data or {})
+    raw_inventory = payload.get("inventory", [])
+    payload["inventory"] = raw_inventory if isinstance(raw_inventory, list) else []
+    status_seed_data = dict(payload)
+    status_seed_data["inventory"] = normalize_inventory_items(payload["inventory"])
+    payload["statuses"] = normalize_statuses(status_seed_data)
+
+    if not isinstance(payload.get("weaknesses"), list):
+        payload["weaknesses"] = []
+
+    return payload
 
 
 class CharacterCreate(BaseModel):
@@ -35,7 +125,9 @@ class CharacterCreate(BaseModel):
 
     # Skills with detailed information
     skills: list[dict] = Field(default_factory=list, description="스킬 목록")
-    weaknesses: list[str] = Field(default_factory=list, description="약점")
+    weaknesses: list[str] | None = Field(default=None, description="레거시 약점 필드")
+    statuses: list[dict[str, Any] | str] | None = Field(default=None, description="상태")
+    inventory: list[dict[str, Any] | str] | None = Field(default=None, description="인벤토리")
 
     class Config:
         json_schema_extra = {
@@ -55,7 +147,11 @@ class CharacterCreate(BaseModel):
                     {"type": "passive", "name": "예리한 시야", "description": "어둠 속에서도 멀리 볼 수 있다"},
                     {"type": "active", "name": "정밀 사격", "description": "집중하여 급소를 노린다"},
                 ],
-                "weaknesses": ["어둠 공포증"],
+                "statuses": [{"name": "집중", "type": "buff", "modifier": 2}],
+                "inventory": [
+                    {"name": "치유 물약", "type": "consumable", "quantity": 2},
+                    {"name": "강철 검", "type": "equipment", "equipped": True, "modifier": 1},
+                ],
             }
         }
 
@@ -78,7 +174,9 @@ class CharacterUpdate(BaseModel):
 
     # Skills with detailed information
     skills: list[dict] = Field(default_factory=list, description="스킬 목록")
-    weaknesses: list[str] = Field(default_factory=list, description="약점")
+    weaknesses: list[str] | None = Field(default=None, description="레거시 약점 필드")
+    statuses: list[dict[str, Any] | str] | None = Field(default=None, description="상태")
+    inventory: list[dict[str, Any] | str] | None = Field(default=None, description="인벤토리")
 
     class Config:
         json_schema_extra = {
@@ -97,7 +195,11 @@ class CharacterUpdate(BaseModel):
                     {"type": "passive", "name": "예리한 시야", "description": "어둠 속에서도 멀리 볼 수 있다"},
                     {"type": "active", "name": "정밀 사격", "description": "집중하여 급소를 노린다"},
                 ],
-                "weaknesses": ["어둠 공포증"],
+                "statuses": [{"name": "집중", "type": "buff", "modifier": 2}],
+                "inventory": [
+                    {"name": "치유 물약", "type": "consumable", "quantity": 2},
+                    {"name": "강철 검", "type": "equipment", "equipped": True, "modifier": 1},
+                ],
             }
         }
 
@@ -152,6 +254,10 @@ class CharacterShareCodeRedeemResponse(BaseModel):
     character: CharacterResponse
 
 
+class InventoryConsumeRequest(BaseModel):
+    item_name: str = Field(..., min_length=1, description="소모할 아이템 이름")
+
+
 def _generate_unique_share_code(db: Session) -> str:
     """Generate a unique 9-digit numeric share code."""
     for _ in range(30):
@@ -166,8 +272,7 @@ def _build_shared_character_name(db: Session, target_user_id: int, source_name: 
     """Build a non-conflicting character name for shared character import."""
     base_name = source_name.strip()
     same_name_exists = (
-        db.query(Character).filter(Character.user_id == target_user_id, Character.name == base_name).first()
-        is not None
+        db.query(Character).filter(Character.user_id == target_user_id, Character.name == base_name).first() is not None
     )
     if not same_name_exists:
         return base_name
@@ -212,7 +317,7 @@ def get_character(character_id: int, db: Session = Depends(get_db)):
         id=character.id,
         user_id=character.user_id,
         name=character.name,
-        data=character.data,
+        data=_normalize_character_data_for_response(character.data),
         created_at=character.created_at.isoformat(),
     )
 
@@ -233,7 +338,11 @@ def get_user_characters(user_id: int, db: Session = Depends(get_db)):
 
     return [
         CharacterResponse(
-            id=char.id, user_id=char.user_id, name=char.name, data=char.data, created_at=char.created_at.isoformat()
+            id=char.id,
+            user_id=char.user_id,
+            name=char.name,
+            data=_normalize_character_data_for_response(char.data),
+            created_at=char.created_at.isoformat(),
         )
         for char in characters
     ]
@@ -265,22 +374,23 @@ def create_character(char_data: CharacterCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail=f"User with id {char_data.user_id} not found")
 
     try:
-        # Initialize character data with D20 stats
-        character_data = {
-            "age": char_data.age,
-            "race": char_data.race,
-            "concept": char_data.concept,
-            "strength": char_data.strength,
-            "dexterity": char_data.dexterity,
-            "constitution": char_data.constitution,
-            "intelligence": char_data.intelligence,
-            "wisdom": char_data.wisdom,
-            "charisma": char_data.charisma,
-            "skills": char_data.skills,
-            "weaknesses": char_data.weaknesses,
-            "status_effects": [],
-            "inventory": [],
-        }
+        character_data = _build_character_data(
+            age=char_data.age,
+            race=char_data.race,
+            concept=char_data.concept,
+            strength=char_data.strength,
+            dexterity=char_data.dexterity,
+            constitution=char_data.constitution,
+            intelligence=char_data.intelligence,
+            wisdom=char_data.wisdom,
+            charisma=char_data.charisma,
+            skills=char_data.skills,
+            statuses=char_data.statuses,
+            weaknesses=char_data.weaknesses,
+            inventory=char_data.inventory,
+            status_effects=[],
+            sync_status_effects=False,
+        )
 
         # Create new character
         new_character = Character(
@@ -295,7 +405,7 @@ def create_character(char_data: CharacterCreate, db: Session = Depends(get_db)):
             id=new_character.id,
             user_id=new_character.user_id,
             name=new_character.name,
-            data=new_character.data,
+            data=_normalize_character_data_for_response(new_character.data),
             created_at=new_character.created_at.isoformat(),
         )
 
@@ -333,23 +443,30 @@ def update_character(character_id: int, char_data: CharacterUpdate, db: Session 
         raise HTTPException(status_code=400, detail="Name is required and cannot be empty")
 
     try:
-        # Update character with D20 stats
+        existing_data = character.data if isinstance(character.data, dict) else {}
         character.name = char_data.name.strip()
-        character.data = {
-            "age": char_data.age,
-            "race": char_data.race,
-            "concept": char_data.concept,
-            "strength": char_data.strength,
-            "dexterity": char_data.dexterity,
-            "constitution": char_data.constitution,
-            "intelligence": char_data.intelligence,
-            "wisdom": char_data.wisdom,
-            "charisma": char_data.charisma,
-            "skills": char_data.skills,
-            "weaknesses": char_data.weaknesses,
-            "status_effects": character.data.get("status_effects", []),
-            "inventory": character.data.get("inventory", []),
-        }
+        should_sync_status_effects = (
+            char_data.statuses is not None or char_data.weaknesses is not None or char_data.inventory is not None
+        )
+        character.data = _build_character_data(
+            age=char_data.age,
+            race=char_data.race,
+            concept=char_data.concept,
+            strength=char_data.strength,
+            dexterity=char_data.dexterity,
+            constitution=char_data.constitution,
+            intelligence=char_data.intelligence,
+            wisdom=char_data.wisdom,
+            charisma=char_data.charisma,
+            skills=char_data.skills,
+            statuses=char_data.statuses if char_data.statuses is not None else existing_data.get("statuses", []),
+            weaknesses=char_data.weaknesses
+            if char_data.weaknesses is not None
+            else existing_data.get("weaknesses", []),
+            inventory=char_data.inventory if char_data.inventory is not None else existing_data.get("inventory", []),
+            status_effects=existing_data.get("status_effects", []),
+            sync_status_effects=should_sync_status_effects,
+        )
 
         db.commit()
         db.refresh(character)
@@ -358,7 +475,7 @@ def update_character(character_id: int, char_data: CharacterUpdate, db: Session 
             id=character.id,
             user_id=character.user_id,
             name=character.name,
-            data=character.data,
+            data=_normalize_character_data_for_response(character.data),
             created_at=character.created_at.isoformat(),
         )
 
@@ -391,6 +508,47 @@ def delete_character(character_id: int, db: Session = Depends(get_db)):
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to delete character: {e!s}")
+
+
+@router.post("/{character_id}/inventory/consume", response_model=CharacterResponse)
+def consume_character_inventory_item(
+    character_id: int,
+    payload: InventoryConsumeRequest,
+    db: Session = Depends(get_db),
+):
+    character = db.query(Character).filter(Character.id == character_id).first()
+    if not character:
+        raise HTTPException(status_code=404, detail=f"Character with id {character_id} not found")
+
+    try:
+        data = deepcopy(character.data or {})
+        original_inventory = normalize_inventory_items(data.get("inventory", []))
+        updated_inventory = consume_inventory_item(original_inventory, payload.item_name)
+
+        if updated_inventory == original_inventory:
+            raise HTTPException(status_code=400, detail="Consumable item not found")
+
+        data["inventory"] = updated_inventory
+        status_seed_data = dict(data)
+        status_seed_data["inventory"] = updated_inventory
+        data["statuses"] = normalize_statuses(status_seed_data, include_legacy_status_effects=True)
+
+        character.data = data
+        db.commit()
+        db.refresh(character)
+
+        return CharacterResponse(
+            id=character.id,
+            user_id=character.user_id,
+            name=character.name,
+            data=_normalize_character_data_for_response(character.data),
+            created_at=character.created_at.isoformat(),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to consume inventory item: {e!s}")
 
 
 @router.post("/{character_id}/share-code", response_model=CharacterShareCodeCreateResponse, status_code=201)
@@ -480,7 +638,9 @@ def redeem_character_share_code(payload: CharacterShareCodeRedeemRequest, db: Se
         raise HTTPException(status_code=400, detail="Share code has already been used")
 
     if _is_share_code_expired(share_entry):
-        raise HTTPException(status_code=400, detail=f"Share code has expired (valid for {SHARE_CODE_EXPIRE_MINUTES} minutes)")
+        raise HTTPException(
+            status_code=400, detail=f"Share code has expired (valid for {SHARE_CODE_EXPIRE_MINUTES} minutes)"
+        )
 
     if share_entry.source_user_id == payload.user_id:
         raise HTTPException(status_code=400, detail="You cannot redeem your own share code")
@@ -509,7 +669,7 @@ def redeem_character_share_code(payload: CharacterShareCodeRedeemRequest, db: Se
             id=new_character.id,
             user_id=new_character.user_id,
             name=new_character.name,
-            data=new_character.data,
+            data=_normalize_character_data_for_response(new_character.data),
             created_at=new_character.created_at.isoformat(),
         )
 
@@ -573,7 +733,7 @@ def duplicate_character(character_id: int, db: Session = Depends(get_db)):
             id=new_character.id,
             user_id=new_character.user_id,
             name=new_character.name,
-            data=new_character.data,
+            data=_normalize_character_data_for_response(new_character.data),
             created_at=new_character.created_at.isoformat(),
         )
 

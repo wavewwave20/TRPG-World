@@ -215,7 +215,7 @@ class CharacterGrowthLog(Base):
         session_id: 세션 ID
         act_id: 어떤 Act의 완료로 인한 성장인지
         character_id: 성장 대상 캐릭터
-        growth_type: 성장 유형 (ability_increase, new_skill, weakness_mitigated)
+        growth_type: 성장 유형 (ability_increase, new_skill)
         growth_detail: 성장 상세 내용 JSON
         narrative_reason: AI가 생성한 성장 이유 (서사적 설명)
         applied_at: 적용 시각
@@ -231,6 +231,29 @@ class CharacterGrowthLog(Base):
     growth_detail = Column(JSON, nullable=False)
     narrative_reason = Column(Text, nullable=False)
     applied_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class SessionActivityLog(Base):
+    """
+    세션 단위 활동 로그.
+
+    세션 로드 화면에서 호스트가 세션 운영 이력을 조회할 수 있도록
+    핵심 액션/동기화/오류 이벤트를 저장합니다.
+    """
+
+    __tablename__ = "session_activity_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, ForeignKey("game_sessions.id"), nullable=False, index=True)
+    actor_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    actor_character_id = Column(Integer, ForeignKey("characters.id"), nullable=True, index=True)
+    source = Column(String(32), nullable=False, default="system", server_default="system")
+    action_type = Column(String(80), nullable=False, index=True)
+    status = Column(String(20), nullable=False, default="info", server_default="info")
+    message = Column(Text, nullable=True)
+    detail = Column(JSON, nullable=True)
+    dedupe_key = Column(String(160), nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
 
 
 class ActionJudgment(Base):
@@ -345,7 +368,9 @@ class LLMModel(Base):
         provider: 프로바이더 식별자 (llm_api_keys.provider 참조)
         model_id: LiteLLM 형식 모델 식별자 (예: "gpt-4o", "gemini/gemini-2.5-flash")
         display_name: 사용자 표시명
-        is_active: 현재 활성 모델 여부 (한 번에 하나만 활성)
+        is_active: 레거시 활성 플래그(스토리/판정 중 하나라도 활성)
+        is_active_story: 메인 스토리 생성용 활성 모델 여부
+        is_active_judgment: 판정/보조 추론용 활성 모델 여부
         created_at: 생성 시각
     """
 
@@ -356,4 +381,6 @@ class LLMModel(Base):
     model_id = Column(String(200), nullable=False, unique=True)
     display_name = Column(String(200), nullable=False)
     is_active = Column(Boolean, default=False, nullable=False)
+    is_active_story = Column(Boolean, default=False, nullable=False, server_default="false")
+    is_active_judgment = Column(Boolean, default=False, nullable=False, server_default="false")
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

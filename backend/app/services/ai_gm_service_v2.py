@@ -24,7 +24,6 @@ from app.models import (
     Character,
     CharacterGrowthLog,
     GameSession,
-    SessionParticipant,
     StoryAct,
     StoryFlowMetric,
     StoryLog,
@@ -48,6 +47,7 @@ from app.services.background_task_manager import get_task_manager
 from app.services.character_state import normalize_inventory_items, normalize_statuses
 from app.services.context_loader import ContextLoadError, GameContext, load_game_context
 from app.services.dice_system import DiceSystem
+from app.services.session_activity_logger import log_session_activity
 from app.services.story_director import get_story_director_service
 from app.services.stream_buffer import get_buffer_manager
 
@@ -1164,6 +1164,7 @@ class AIGMServiceV2:
             for character in self.db.query(Character).filter(Character.id.in_(character_ids)).all()
         }
         changed_count = 0
+        changed_character_ids: list[int] = []
 
         for update in updates:
             character_id = update.get("character_id")
@@ -1260,8 +1261,21 @@ class AIGMServiceV2:
             character.data = data
             flag_modified(character, "data")
             changed_count += 1
+            changed_character_ids.append(character_id)
 
         if changed_count > 0:
+            log_session_activity(
+                self.db,
+                session_id=session_id,
+                source="ai_service",
+                action_type="character.state_inventory_sync",
+                status="success",
+                message="스토리 기반 상태/인벤토리 동기화",
+                detail={
+                    "character_count": changed_count,
+                    "character_ids": sorted(set(changed_character_ids)),
+                },
+            )
             self.db.commit()
             logger.info(f"스토리 기반 상태/인벤토리 업데이트 적용: session={session_id}, characters={changed_count}")
 
@@ -1384,19 +1398,25 @@ class AIGMServiceV2:
 
         logger.info(f"세션 {session_id}: 막 전환 결정! '{current_act_info.title}' → '{analysis.new_act_title}'")
 
-        # 성장 보상 생성
-        growth_rewards = await generate_growth_rewards(
-            world_context=game_context.world_prompt,
-            characters=game_context.characters,
-            act_story_entries=act_story,
-            act_info=current_act_info,
-            llm_model=self.story_model,
-        )
+        growth_rewards = self._load_growth_rewards_for_act(session_id=session_id, act_id=current_act_db.id)
+        if growth_rewards:
+            logger.warning(
+                f"세션 {session_id}: act_id={current_act_db.id} 성장 보상이 이미 존재하여 재적용을 건너뜁니다"
+            )
+        else:
+            # 성장 보상 생성
+            growth_rewards = await generate_growth_rewards(
+                world_context=game_context.world_prompt,
+                characters=game_context.characters,
+                act_story_entries=act_story,
+                act_info=current_act_info,
+                llm_model=self.story_model,
+            )
 
-        # 성장 보상 적용 + DB 저장
-        for reward in growth_rewards:
-            self._apply_growth_reward(reward)
-        self._persist_growth_rewards(session_id, current_act_db.id, growth_rewards)
+            # 성장 보상 적용 + DB 저장
+            for reward in growth_rewards:
+                self._apply_growth_reward(reward)
+            self._persist_growth_rewards(session_id, current_act_db.id, growth_rewards)
 
         # Act 종료 시점에만 ai_summary 갱신
         session = self.db.query(GameSession).filter(GameSession.id == session_id).first()
@@ -1434,6 +1454,13 @@ class AIGMServiceV2:
             started_at=datetime.utcnow(),
         )
         self.db.add(new_act)
+        self.db.flush()
+        self._log_act_transition_activity(
+            session_id=session_id,
+            completed_act=current_act_db,
+            new_act=new_act,
+            growth_rewards=growth_rewards,
+        )
         self.db.commit()
         self.db.refresh(new_act)
 
@@ -1511,19 +1538,25 @@ class AIGMServiceV2:
         # 게임 컨텍스트 로드
         game_context = load_game_context(db=self.db, session_id=session_id, system_prompt="")
 
-        # 성장 보상 생성
-        growth_rewards = await generate_growth_rewards(
-            world_context=game_context.world_prompt,
-            characters=game_context.characters,
-            act_story_entries=act_story,
-            act_info=current_act_info,
-            llm_model=self.story_model,
-        )
+        growth_rewards = self._load_growth_rewards_for_act(session_id=session_id, act_id=current_act_db.id)
+        if growth_rewards:
+            logger.warning(
+                f"세션 {session_id}: act_id={current_act_db.id} 성장 보상이 이미 존재하여 재적용을 건너뜁니다"
+            )
+        else:
+            # 성장 보상 생성
+            growth_rewards = await generate_growth_rewards(
+                world_context=game_context.world_prompt,
+                characters=game_context.characters,
+                act_story_entries=act_story,
+                act_info=current_act_info,
+                llm_model=self.story_model,
+            )
 
-        # 성장 보상 적용 + DB 저장
-        for reward in growth_rewards:
-            self._apply_growth_reward(reward)
-        self._persist_growth_rewards(session_id, current_act_db.id, growth_rewards)
+            # 성장 보상 적용 + DB 저장
+            for reward in growth_rewards:
+                self._apply_growth_reward(reward)
+            self._persist_growth_rewards(session_id, current_act_db.id, growth_rewards)
 
         # ai_summary 갱신
         session = self.db.query(GameSession).filter(GameSession.id == session_id).first()
@@ -1563,6 +1596,13 @@ class AIGMServiceV2:
             started_at=datetime.utcnow(),
         )
         self.db.add(new_act)
+        self.db.flush()
+        self._log_act_transition_activity(
+            session_id=session_id,
+            completed_act=current_act_db,
+            new_act=new_act,
+            growth_rewards=growth_rewards,
+        )
         self.db.commit()
         self.db.refresh(new_act)
 
@@ -1586,6 +1626,84 @@ class AIGMServiceV2:
             completed_act=completed_act_info,
             new_act=new_act_info,
             growth_rewards=growth_rewards,
+        )
+
+    def _load_growth_rewards_for_act(self, *, session_id: int, act_id: int) -> list[GrowthReward]:
+        growth_logs = (
+            self.db.query(CharacterGrowthLog)
+            .filter(
+                CharacterGrowthLog.session_id == session_id,
+                CharacterGrowthLog.act_id == act_id,
+            )
+            .order_by(CharacterGrowthLog.id.asc())
+            .all()
+        )
+        if not growth_logs:
+            return []
+
+        character_ids = sorted({g.character_id for g in growth_logs})
+        name_map = {
+            c.id: c.name
+            for c in self.db.query(Character).filter(Character.id.in_(character_ids)).all()
+        }
+        rewards: list[GrowthReward] = []
+        for growth_log in growth_logs:
+            rewards.append(
+                GrowthReward(
+                    character_id=growth_log.character_id,
+                    character_name=name_map.get(growth_log.character_id, f"캐릭터 {growth_log.character_id}"),
+                    growth_type=growth_log.growth_type,
+                    growth_detail=growth_log.growth_detail if isinstance(growth_log.growth_detail, dict) else {},
+                    narrative_reason=growth_log.narrative_reason or "",
+                )
+            )
+        return rewards
+
+    def _log_act_transition_activity(
+        self,
+        *,
+        session_id: int,
+        completed_act: StoryAct,
+        new_act: StoryAct,
+        growth_rewards: list[GrowthReward],
+    ) -> None:
+        growth_summary = [
+            {
+                "character_id": reward.character_id,
+                "character_name": reward.character_name,
+                "growth_type": reward.growth_type,
+            }
+            for reward in growth_rewards
+        ]
+        log_session_activity(
+            self.db,
+            session_id=session_id,
+            source="ai_service",
+            action_type="act.transition",
+            status="success",
+            message=f"{completed_act.act_number}막 종료 → {new_act.act_number}막 시작",
+            detail={
+                "completed_act_id": completed_act.id,
+                "completed_act_number": completed_act.act_number,
+                "new_act_id": new_act.id,
+                "new_act_number": new_act.act_number,
+                "new_act_title": new_act.title,
+            },
+            dedupe_key=f"act-transition:{completed_act.id}",
+        )
+        log_session_activity(
+            self.db,
+            session_id=session_id,
+            source="ai_service",
+            action_type="reward.act_growth_applied",
+            status="success",
+            message=f"막 종료 보상 {len(growth_rewards)}건 적용",
+            detail={
+                "completed_act_id": completed_act.id,
+                "reward_count": len(growth_rewards),
+                "rewards": growth_summary,
+            },
+            dedupe_key=f"act-reward:{completed_act.id}",
         )
 
     def _apply_growth_reward(self, reward: GrowthReward) -> None:
