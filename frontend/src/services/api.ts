@@ -463,6 +463,8 @@ export interface ModelResponse {
   model_id: string;
   display_name: string;
   is_active: boolean;
+  is_active_story: boolean;
+  is_active_judgment: boolean;
   has_api_key: boolean;
   created_at: string;
 }
@@ -471,8 +473,14 @@ export interface LLMSettingsResponse {
   api_keys: ApiKeyResponse[];
   models: ModelResponse[];
   active_model: ModelResponse | null;
+  active_story_model: ModelResponse | null;
+  active_judgment_model: ModelResponse | null;
   active_source: string;
+  active_story_source: string;
+  active_judgment_source: string;
   env_model: string | null;
+  env_story_model: string | null;
+  env_judgment_model: string | null;
 }
 
 export interface LLMTestResult {
@@ -536,9 +544,10 @@ export async function removeModel(
 
 export async function activateModel(
   userId: number,
-  modelId: number
+  modelId: number,
+  purpose: 'story' | 'judgment' = 'story'
 ): Promise<ModelResponse> {
-  const url = `${API_BASE_URL}/api/llm-settings/models/${modelId}/activate?user_id=${userId}`;
+  const url = `${API_BASE_URL}/api/llm-settings/models/${modelId}/activate?user_id=${userId}&purpose=${purpose}`;
   return fetchWithErrorHandling<ModelResponse>(url, {
     method: 'POST',
   });
@@ -546,9 +555,10 @@ export async function activateModel(
 
 export async function deactivateModel(
   userId: number,
-  modelId: number
+  modelId: number,
+  purpose: 'story' | 'judgment' = 'story'
 ): Promise<ModelResponse> {
-  const url = `${API_BASE_URL}/api/llm-settings/models/${modelId}/deactivate?user_id=${userId}`;
+  const url = `${API_BASE_URL}/api/llm-settings/models/${modelId}/deactivate?user_id=${userId}&purpose=${purpose}`;
   return fetchWithErrorHandling<ModelResponse>(url, {
     method: 'POST',
   });
@@ -597,7 +607,7 @@ export async function getGrowthHistory(
     rewards: item.rewards.map((r) => ({
       characterId: r.character_id,
       characterName: r.character_name,
-      growthType: r.growth_type as 'ability_increase' | 'new_skill' | 'weakness_mitigated',
+      growthType: r.growth_type as 'ability_increase' | 'new_skill',
       growthDetail: r.growth_detail,
       narrativeReason: r.narrative_reason,
     })),

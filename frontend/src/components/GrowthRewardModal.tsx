@@ -8,8 +8,6 @@ function GrowthIcon({ type }: { type: GrowthReward['growthType'] }) {
       return <span className="text-lg">&#x2B06;</span>; // up arrow
     case 'new_skill':
       return <span className="text-lg">&#x2728;</span>; // sparkles
-    case 'weakness_mitigated':
-      return <span className="text-lg">&#x1F6E1;</span>; // shield
     default:
       return null;
   }
@@ -21,8 +19,6 @@ function growthTypeLabel(type: GrowthReward['growthType']): string {
       return '능력치 상승';
     case 'new_skill':
       return '새 스킬 습득';
-    case 'weakness_mitigated':
-      return '약점 완화';
     default:
       return '성장';
   }
@@ -45,18 +41,15 @@ function GrowthDetail({ reward }: { reward: GrowthReward }) {
       );
     }
     case 'new_skill': {
-      const skillName = detail.skill_name ?? detail.name ?? '???';
+      const rawSkill = detail.skill;
+      const nestedSkillName =
+        rawSkill && typeof rawSkill === 'object'
+          ? String((rawSkill as Record<string, unknown>).name ?? '').trim()
+          : '';
+      const skillName = nestedSkillName || detail.skill_name || detail.name || '???';
       return (
         <span className="text-blue-700 font-bold">
           {skillName}
-        </span>
-      );
-    }
-    case 'weakness_mitigated': {
-      const weaknessName = detail.weakness ?? detail.name ?? '???';
-      return (
-        <span className="text-orange-700 font-bold">
-          {weaknessName} 완화
         </span>
       );
     }

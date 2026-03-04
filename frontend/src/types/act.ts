@@ -16,7 +16,7 @@ export interface StoryActInfo {
 export interface GrowthReward {
   characterId: number;
   characterName: string;
-  growthType: 'ability_increase' | 'new_skill' | 'weakness_mitigated';
+  growthType: 'ability_increase' | 'new_skill';
   growthDetail: Record<string, any>;
   narrativeReason: string;
 }

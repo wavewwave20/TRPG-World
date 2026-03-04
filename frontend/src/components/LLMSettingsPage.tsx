@@ -29,9 +29,13 @@ export default function LLMSettingsPage({ onBack }: LLMSettingsPageProps) {
   // Data
   const [apiKeys, setApiKeys] = useState<ApiKeyResponse[]>([]);
   const [models, setModels] = useState<ModelResponse[]>([]);
-  const [activeModel, setActiveModel] = useState<ModelResponse | null>(null);
-  const [activeSource, setActiveSource] = useState('environment');
+  const [activeStoryModel, setActiveStoryModel] = useState<ModelResponse | null>(null);
+  const [activeJudgmentModel, setActiveJudgmentModel] = useState<ModelResponse | null>(null);
+  const [activeStorySource, setActiveStorySource] = useState('environment');
+  const [activeJudgmentSource, setActiveJudgmentSource] = useState('environment');
   const [envModel, setEnvModel] = useState<string | null>(null);
+  const [envStoryModel, setEnvStoryModel] = useState<string | null>(null);
+  const [envJudgmentModel, setEnvJudgmentModel] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -60,9 +64,13 @@ export default function LLMSettingsPage({ onBack }: LLMSettingsPageProps) {
       const data = await getLLMSettings(userId);
       setApiKeys(data.api_keys);
       setModels(data.models);
-      setActiveModel(data.active_model);
-      setActiveSource(data.active_source);
+      setActiveStoryModel(data.active_story_model);
+      setActiveJudgmentModel(data.active_judgment_model);
+      setActiveStorySource(data.active_story_source);
+      setActiveJudgmentSource(data.active_judgment_source);
       setEnvModel(data.env_model);
+      setEnvStoryModel(data.env_story_model);
+      setEnvJudgmentModel(data.env_judgment_model);
       setError('');
     } catch (e: any) {
       setError(e.message || 'Failed to load settings');
@@ -139,7 +147,7 @@ export default function LLMSettingsPage({ onBack }: LLMSettingsPageProps) {
   const handleActivate = async (id: number) => {
     if (!userId) return;
     try {
-      await activateModel(userId, id);
+      await activateModel(userId, id, 'story');
       await fetchSettings();
     } catch (e: any) {
       setError(e.message || 'Failed to activate model');
@@ -149,7 +157,27 @@ export default function LLMSettingsPage({ onBack }: LLMSettingsPageProps) {
   const handleDeactivate = async (id: number) => {
     if (!userId) return;
     try {
-      await deactivateModel(userId, id);
+      await deactivateModel(userId, id, 'story');
+      await fetchSettings();
+    } catch (e: any) {
+      setError(e.message || 'Failed to deactivate model');
+    }
+  };
+
+  const handleActivateJudgment = async (id: number) => {
+    if (!userId) return;
+    try {
+      await activateModel(userId, id, 'judgment');
+      await fetchSettings();
+    } catch (e: any) {
+      setError(e.message || 'Failed to activate model');
+    }
+  };
+
+  const handleDeactivateJudgment = async (id: number) => {
+    if (!userId) return;
+    try {
+      await deactivateModel(userId, id, 'judgment');
       await fetchSettings();
     } catch (e: any) {
       setError(e.message || 'Failed to deactivate model');
@@ -200,17 +228,37 @@ export default function LLMSettingsPage({ onBack }: LLMSettingsPageProps) {
         </div>
       )}
 
-      {/* Current Active Status */}
-      <div className="mb-6 p-4 bg-slate-50 border border-slate-200 rounded-xl">
-        <div className="text-sm text-slate-500 mb-1">Current Active Model</div>
-        <div className="flex items-center gap-2">
-          <span className={`inline-block w-2 h-2 rounded-full ${activeSource === 'database' ? 'bg-green-500' : 'bg-yellow-500'}`} />
-          <span className="font-semibold text-slate-800">
-            {activeModel ? `${activeModel.display_name} (${activeModel.model_id})` : envModel || 'gpt-4o'}
-          </span>
-          <span className="text-xs text-slate-400 ml-1">
-            {activeSource === 'database' ? 'DB' : 'ENV'}
-          </span>
+      {/* Current Active Models */}
+      <div className="mb-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {/* Story Model */}
+        <div className={`p-4 rounded-xl border-2 ${activeStorySource === 'database' ? 'border-indigo-300 bg-indigo-50/40' : 'border-slate-200 bg-slate-50'}`}>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">Story</span>
+            <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${activeStorySource === 'database' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+              {activeStorySource === 'database' ? 'DB' : 'ENV'}
+            </span>
+          </div>
+          <div className="font-semibold text-slate-800 text-sm truncate">
+            {activeStoryModel?.display_name || envStoryModel || envModel || 'gpt-4o'}
+          </div>
+          <div className="text-xs text-slate-400 font-mono truncate mt-0.5">
+            {activeStoryModel?.model_id || envStoryModel || envModel || 'gpt-4o'}
+          </div>
+        </div>
+        {/* Judgment Model */}
+        <div className={`p-4 rounded-xl border-2 ${activeJudgmentSource === 'database' ? 'border-amber-300 bg-amber-50/40' : 'border-slate-200 bg-slate-50'}`}>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">Judgment</span>
+            <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${activeJudgmentSource === 'database' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+              {activeJudgmentSource === 'database' ? 'DB' : 'ENV'}
+            </span>
+          </div>
+          <div className="font-semibold text-slate-800 text-sm truncate">
+            {activeJudgmentModel?.display_name || envJudgmentModel || envModel || 'gpt-4o-mini'}
+          </div>
+          <div className="text-xs text-slate-400 font-mono truncate mt-0.5">
+            {activeJudgmentModel?.model_id || envJudgmentModel || envModel || 'gpt-4o-mini'}
+          </div>
         </div>
       </div>
 
@@ -422,95 +470,117 @@ export default function LLMSettingsPage({ onBack }: LLMSettingsPageProps) {
             )}
 
             <div className="space-y-3">
-              {models.map((model) => (
-                <div
-                  key={model.id}
-                  className={`p-4 bg-white border rounded-xl shadow-sm transition-colors ${
-                    model.is_active ? 'border-green-300 bg-green-50/30' : 'border-slate-200'
-                  }`}
-                >
-                  <div className="flex items-start justify-between mb-1">
-                    <div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-semibold text-slate-800">{model.display_name}</span>
-                        <span className="text-xs px-2 py-0.5 bg-slate-100 text-slate-500 rounded-full">
-                          {PROVIDERS.find((p) => p.provider === model.provider)?.display || model.provider}
-                        </span>
-                        {model.is_active && (
-                          <span className="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded-full font-medium">Active</span>
-                        )}
-                        {!model.has_api_key && (
-                          <span className="text-xs px-2 py-0.5 bg-yellow-50 text-yellow-600 rounded-full border border-yellow-200">No API Key</span>
+              {models.map((model) => {
+                const isStory = model.is_active_story;
+                const isJudgment = model.is_active_judgment;
+                const hasRole = isStory || isJudgment;
+
+                return (
+                  <div
+                    key={model.id}
+                    className={`p-4 bg-white border-2 rounded-xl shadow-sm transition-colors ${
+                      isStory && isJudgment
+                        ? 'border-purple-300 bg-purple-50/20'
+                        : isStory
+                          ? 'border-indigo-300 bg-indigo-50/20'
+                          : isJudgment
+                            ? 'border-amber-300 bg-amber-50/20'
+                            : 'border-slate-200'
+                    }`}
+                  >
+                    {/* Header */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-semibold text-slate-800">{model.display_name}</span>
+                          <span className="text-xs px-2 py-0.5 bg-slate-100 text-slate-500 rounded-full">
+                            {PROVIDERS.find((p) => p.provider === model.provider)?.display || model.provider}
+                          </span>
+                          {!model.has_api_key && (
+                            <span className="text-xs px-2 py-0.5 bg-yellow-50 text-yellow-600 rounded-full border border-yellow-200">No API Key</span>
+                          )}
+                        </div>
+                        <div className="text-sm text-slate-400 font-mono mt-0.5 truncate">{model.model_id}</div>
+                      </div>
+                      {/* Utility buttons: Test / Delete */}
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          onClick={() => handleTest(model.id)}
+                          disabled={testingModelId === model.id || !model.has_api_key}
+                          className="px-2.5 py-1 bg-blue-50 text-blue-600 border border-blue-200 rounded-lg text-xs font-medium hover:bg-blue-100 disabled:opacity-40 transition-colors"
+                          title={!model.has_api_key ? 'Set an API key first' : 'Test connection'}
+                        >
+                          {testingModelId === model.id ? '...' : 'Test'}
+                        </button>
+                        {confirmDeleteModelId === model.id ? (
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => handleRemoveModel(model.id)}
+                              className="px-2.5 py-1 bg-red-600 text-white rounded-lg text-xs font-medium hover:bg-red-700 transition-colors"
+                            >
+                              Confirm
+                            </button>
+                            <button
+                              onClick={() => setConfirmDeleteModelId(null)}
+                              className="px-2.5 py-1 bg-slate-100 text-slate-600 rounded-lg text-xs font-medium hover:bg-slate-200 transition-colors"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setConfirmDeleteModelId(model.id)}
+                            disabled={hasRole}
+                            className="px-2.5 py-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg text-xs transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                            title={hasRole ? 'Deactivate all roles first' : 'Delete model'}
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+                              <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
+                            </svg>
+                          </button>
                         )}
                       </div>
-                      <div className="text-sm text-slate-500 font-mono mt-1">{model.model_id}</div>
                     </div>
-                  </div>
 
-                  {/* Test Result */}
-                  {testResult && testResult.id === model.id && (
-                    <div className={`mb-2 p-2 rounded-lg text-xs ${
-                      testResult.success ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
-                    }`}>
-                      {testResult.message}
-                    </div>
-                  )}
-
-                  {/* Actions */}
-                  <div className="flex flex-wrap gap-2 mt-3">
-                    {model.is_active ? (
-                      <button
-                        onClick={() => handleDeactivate(model.id)}
-                        className="px-3 py-1.5 bg-yellow-50 text-yellow-700 border border-yellow-200 rounded-lg text-xs font-medium hover:bg-yellow-100 transition-colors"
-                      >
-                        Deactivate
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => handleActivate(model.id)}
-                        disabled={!model.has_api_key}
-                        className="px-3 py-1.5 bg-green-50 text-green-700 border border-green-200 rounded-lg text-xs font-medium hover:bg-green-100 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                        title={!model.has_api_key ? 'Set an API key for this provider first' : ''}
-                      >
-                        Activate
-                      </button>
-                    )}
-                    <button
-                      onClick={() => handleTest(model.id)}
-                      disabled={testingModelId === model.id || !model.has_api_key}
-                      className="px-3 py-1.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg text-xs font-medium hover:bg-blue-100 disabled:opacity-50 transition-colors"
-                      title={!model.has_api_key ? 'Set an API key for this provider first' : ''}
-                    >
-                      {testingModelId === model.id ? 'Testing...' : 'Test'}
-                    </button>
-                    {confirmDeleteModelId === model.id ? (
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => handleRemoveModel(model.id)}
-                          className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-xs font-medium hover:bg-red-700 transition-colors"
-                        >
-                          Confirm
-                        </button>
-                        <button
-                          onClick={() => setConfirmDeleteModelId(null)}
-                          className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-medium hover:bg-slate-200 transition-colors"
-                        >
-                          Cancel
-                        </button>
+                    {/* Test Result */}
+                    {testResult && testResult.id === model.id && (
+                      <div className={`mt-2 p-2 rounded-lg text-xs ${
+                        testResult.success ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
+                      }`}>
+                        {testResult.message}
                       </div>
-                    ) : (
-                      <button
-                        onClick={() => setConfirmDeleteModelId(model.id)}
-                        disabled={model.is_active}
-                        className="px-3 py-1.5 bg-red-50 text-red-600 border border-red-200 rounded-lg text-xs font-medium hover:bg-red-100 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                        title={model.is_active ? 'Deactivate first to delete' : ''}
-                      >
-                        Delete
-                      </button>
                     )}
+
+                    {/* Role Toggle Buttons */}
+                    <div className="flex gap-2 mt-3">
+                      <button
+                        onClick={() => isStory ? handleDeactivate(model.id) : handleActivate(model.id)}
+                        disabled={!isStory && !model.has_api_key}
+                        className={`flex-1 py-2 rounded-lg text-xs font-semibold border-2 transition-all ${
+                          isStory
+                            ? 'bg-indigo-100 text-indigo-800 border-indigo-300 hover:bg-indigo-200'
+                            : 'bg-white text-slate-400 border-slate-200 hover:border-indigo-300 hover:text-indigo-600 disabled:opacity-30 disabled:cursor-not-allowed'
+                        }`}
+                        title={!model.has_api_key && !isStory ? 'Set an API key first' : ''}
+                      >
+                        {isStory ? 'Story ✓' : 'Story'}
+                      </button>
+                      <button
+                        onClick={() => isJudgment ? handleDeactivateJudgment(model.id) : handleActivateJudgment(model.id)}
+                        disabled={!isJudgment && !model.has_api_key}
+                        className={`flex-1 py-2 rounded-lg text-xs font-semibold border-2 transition-all ${
+                          isJudgment
+                            ? 'bg-amber-100 text-amber-800 border-amber-300 hover:bg-amber-200'
+                            : 'bg-white text-slate-400 border-slate-200 hover:border-amber-300 hover:text-amber-600 disabled:opacity-30 disabled:cursor-not-allowed'
+                        }`}
+                        title={!model.has_api_key && !isJudgment ? 'Set an API key first' : ''}
+                      >
+                        {isJudgment ? 'Judgment ✓' : 'Judgment'}
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </>

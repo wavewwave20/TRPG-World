@@ -1,7 +1,15 @@
 import { useState, useEffect } from 'react';
 import { useAuthStore } from '../stores/authStore';
 import { useGameStore } from '../stores/gameStore';
-import type { Character as BaseCharacter, Skill as BaseSkill, AbilityKey, Weakness } from '../types/character';
+import type {
+  Character as BaseCharacter,
+  Skill as BaseSkill,
+  AbilityKey,
+  InventoryItem,
+  InventoryItemType,
+  Weakness,
+  UnifiedStatus,
+} from '../types/character';
 import { ABILITY_LABELS, ABILITY_SHORT_LABELS } from '../types/character';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '';
@@ -9,6 +17,18 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 interface Skill extends BaseSkill {
   type: 'passive' | 'active';
   description: string;
+}
+
+interface EditableStatus {
+  name: string;
+  type: 'buff' | 'debuff';
+  modifier: number;
+}
+
+interface EditableInventoryItem extends InventoryItem {
+  name: string;
+  type: InventoryItemType;
+  quantity: number;
 }
 
 interface Character {
@@ -27,8 +47,9 @@ interface Character {
     charisma: number;
     skills: Skill[];
     weaknesses: (string | Weakness)[];
+    statuses?: UnifiedStatus[];
     status_effects: string[];
-    inventory: any[];
+    inventory: (string | InventoryItem)[];
     HP: number;
     MP: number;
   };
@@ -66,9 +87,18 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
   const [newSkillDescription, setNewSkillDescription] = useState('');
   const [newSkillAbility, setNewSkillAbility] = useState<AbilityKey | ''>('');
   
-  // Weaknesses
-  const [weaknesses, setWeaknesses] = useState<string[]>([]);
-  const [newWeakness, setNewWeakness] = useState('');
+  const [statuses, setStatuses] = useState<EditableStatus[]>([]);
+  const [newStatusName, setNewStatusName] = useState('');
+  const [newStatusType, setNewStatusType] = useState<'buff' | 'debuff'>('debuff');
+  const [newStatusModifier, setNewStatusModifier] = useState(-1);
+
+  const [inventory, setInventory] = useState<EditableInventoryItem[]>([]);
+  const [newItemName, setNewItemName] = useState('');
+  const [newItemType, setNewItemType] = useState<InventoryItemType>('equipment');
+  const [newItemQuantity, setNewItemQuantity] = useState(1);
+  const [newItemEquipped, setNewItemEquipped] = useState(false);
+  const [newItemModifier, setNewItemModifier] = useState(0);
+  const [newItemDescription, setNewItemDescription] = useState('');
   
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -77,6 +107,7 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
   const [latestShareCode, setLatestShareCode] = useState<{ characterName: string; code: string } | null>(null);
   const [sharingCharacterId, setSharingCharacterId] = useState<number | null>(null);
   const [redeemingShareCode, setRedeemingShareCode] = useState(false);
+  const [consumingItemKey, setConsumingItemKey] = useState<string | null>(null);
   
   const userId = useAuthStore((state) => state.userId);
   const username = useAuthStore((state) => state.username);
@@ -125,7 +156,21 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
           wisdom,
           charisma,
           skills,
-          weaknesses
+          weaknesses: [],
+          statuses: statuses.map((status) => ({
+            name: status.name,
+            type: status.type,
+            modifier: status.modifier,
+            category: status.modifier >= 0 ? 'physical' : 'mental',
+          })),
+          inventory: inventory.map((item) => ({
+            name: item.name,
+            type: item.type,
+            quantity: item.type === 'consumable' ? Math.max(1, item.quantity ?? 1) : 1,
+            equipped: item.type === 'equipment' ? Boolean(item.equipped) : false,
+            modifier: Number(item.modifier ?? 0),
+            description: item.description?.trim() || undefined,
+          })),
         }),
       });
 
@@ -165,7 +210,21 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
           wisdom,
           charisma,
           skills,
-          weaknesses
+          weaknesses: [],
+          statuses: statuses.map((status) => ({
+            name: status.name,
+            type: status.type,
+            modifier: status.modifier,
+            category: status.modifier >= 0 ? 'physical' : 'mental',
+          })),
+          inventory: inventory.map((item) => ({
+            name: item.name,
+            type: item.type,
+            quantity: item.type === 'consumable' ? Math.max(1, item.quantity ?? 1) : 1,
+            equipped: item.type === 'equipment' ? Boolean(item.equipped) : false,
+            modifier: Number(item.modifier ?? 0),
+            description: item.description?.trim() || undefined,
+          })),
         }),
       });
 
@@ -258,6 +317,33 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
     }
   };
 
+  const handleConsumeInventoryItem = async (characterId: number, itemName: string) => {
+    const key = `${characterId}:${itemName}`;
+    setConsumingItemKey(key);
+    setError('');
+    setNotice('');
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/characters/${characterId}/inventory/consume`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ item_name: itemName }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.detail || 'Failed to consume item');
+      }
+
+      await loadCharacters();
+      setNotice(`소모품 "${itemName}"을(를) 사용했습니다.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to consume item');
+    } finally {
+      setConsumingItemKey(null);
+    }
+  };
+
   const handleRedeemShareCode = async () => {
     if (!userId) return;
 
@@ -306,12 +392,21 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
     setWisdom(10);
     setCharisma(10);
     setSkills([]);
-    setWeaknesses([]);
+    setStatuses([]);
+    setInventory([]);
     setNewSkillType('passive');
     setNewSkillName('');
     setNewSkillDescription('');
     setNewSkillAbility('');
-    setNewWeakness('');
+    setNewStatusName('');
+    setNewStatusType('debuff');
+    setNewStatusModifier(-1);
+    setNewItemName('');
+    setNewItemType('equipment');
+    setNewItemQuantity(1);
+    setNewItemEquipped(false);
+    setNewItemModifier(0);
+    setNewItemDescription('');
     setError('');
     setNotice('');
   };
@@ -329,7 +424,44 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
     setWisdom(character.data.wisdom || 10);
     setCharisma(character.data.charisma || 10);
     setSkills(character.data.skills || []);
-    setWeaknesses((character.data.weaknesses || []).map((w) => (typeof w === 'string' ? w : w.name)));
+    const sourceStatuses: EditableStatus[] = character.data.statuses && character.data.statuses.length > 0
+      ? character.data.statuses
+          : (character.data.weaknesses || []).map((weakness) =>
+          typeof weakness === 'string'
+            ? { name: weakness, type: 'debuff', modifier: -1 }
+            : { name: weakness.name, type: 'debuff', modifier: -1 },
+        );
+    setStatuses(
+      sourceStatuses
+        .map((status): EditableStatus => ({
+          name: status.name,
+          type: status.type === 'buff' ? 'buff' : 'debuff',
+          modifier: Number(status.modifier ?? 0),
+        }))
+        .filter((status) => status.name.trim()),
+    );
+    setInventory(
+      (character.data.inventory || []).map((item) => {
+        if (typeof item === 'string') {
+          return {
+            name: item,
+            type: 'equipment',
+            quantity: 1,
+            equipped: false,
+            modifier: 0,
+            description: '',
+          } as EditableInventoryItem;
+        }
+        return {
+          name: item.name,
+          type: item.type === 'consumable' ? 'consumable' : 'equipment',
+          quantity: Math.max(1, Number(item.quantity ?? 1)),
+          equipped: Boolean(item.equipped),
+          modifier: Number(item.modifier ?? 0),
+          description: item.description || '',
+        } as EditableInventoryItem;
+      }),
+    );
     setShowCreateForm(false);
   };
 
@@ -358,15 +490,55 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
     setSkills(skills.filter((_, i) => i !== index));
   };
 
-  const addWeakness = () => {
-    if (newWeakness.trim() && !weaknesses.includes(newWeakness.trim())) {
-      setWeaknesses([...weaknesses, newWeakness.trim()]);
-      setNewWeakness('');
+  const addStatus = () => {
+    const name = newStatusName.trim();
+    if (!name || statuses.some((status) => status.name === name)) {
+      return;
     }
+    setStatuses([
+      ...statuses,
+      {
+        name,
+        type: newStatusType,
+        modifier: Number(newStatusModifier || 0),
+      },
+    ]);
+    setNewStatusName('');
+    setNewStatusModifier(newStatusType === 'buff' ? 1 : -1);
   };
 
-  const removeWeakness = (weakness: string) => {
-    setWeaknesses(weaknesses.filter(w => w !== weakness));
+  const removeStatus = (name: string) => {
+    setStatuses(statuses.filter((status) => status.name !== name));
+  };
+
+  const addInventoryItem = () => {
+    const name = newItemName.trim();
+    if (!name) {
+      return;
+    }
+
+    setInventory([
+      ...inventory,
+      {
+        name,
+        type: newItemType,
+        quantity: newItemType === 'consumable' ? Math.max(1, Number(newItemQuantity || 1)) : 1,
+        equipped: newItemType === 'equipment' ? newItemEquipped : false,
+        modifier: Number(newItemModifier || 0),
+        description: newItemDescription.trim(),
+      },
+    ]);
+
+    setNewItemName('');
+    setNewItemType('equipment');
+    setNewItemQuantity(1);
+    setNewItemEquipped(false);
+    setNewItemModifier(0);
+    setNewItemDescription('');
+  };
+
+  const removeInventoryItem = (index: number) => {
+    setInventory(inventory.filter((_, itemIndex) => itemIndex !== index));
   };
 
   const calculateModifier = (score: number): number => {
@@ -644,39 +816,146 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
                 )}
               </div>
 
-              {/* 약점 */}
               <div className="space-y-4">
-                <h3 className="text-lg font-semibold text-slate-700 border-b pb-2">약점</h3>
-                <div className="flex gap-2">
+                <h3 className="text-lg font-semibold text-slate-700 border-b pb-2">상태</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
                   <input
                     type="text"
-                    value={newWeakness}
-                    onChange={(e) => setNewWeakness(e.target.value)}
-                    placeholder="약점 입력"
-                    className="flex-1 px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                    value={newStatusName}
+                    onChange={(e) => setNewStatusName(e.target.value)}
+                    placeholder="상태 이름"
+                    className="sm:col-span-2 px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
                   />
+                  <select
+                    value={newStatusType}
+                    onChange={(e) => setNewStatusType(e.target.value as 'buff' | 'debuff')}
+                    className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                  >
+                    <option value="buff">버프</option>
+                    <option value="debuff">디버프</option>
+                  </select>
+                  <input
+                    type="number"
+                    value={newStatusModifier}
+                    onChange={(e) => setNewStatusModifier(Number(e.target.value))}
+                    className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                  />
+                </div>
+                <div>
                   <button
                     type="button"
-                    onClick={addWeakness}
+                    onClick={addStatus}
                     className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors"
                   >
-                    추가
+                    상태 추가
                   </button>
                 </div>
-                {weaknesses.length > 0 && (
+                {statuses.length > 0 && (
                   <div className="flex flex-wrap gap-2">
-                    {weaknesses.map((weakness) => (
-                      <div key={weakness} className="bg-red-100 text-red-800 px-3 py-1 rounded-full text-sm flex items-center gap-2">
-                        <span>{weakness}</span>
+                    {statuses.map((status) => (
+                      <div
+                        key={status.name}
+                        className={`${status.type === 'buff' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'} px-3 py-1 rounded-full text-sm flex items-center gap-2`}
+                      >
+                        <span>{status.name} ({status.modifier >= 0 ? '+' : ''}{status.modifier})</span>
                         <button
                           type="button"
-                          onClick={() => removeWeakness(weakness)}
-                          className="text-red-600 hover:text-red-800 font-bold"
+                          onClick={() => removeStatus(status.name)}
+                          className="font-bold"
                         >
                           ×
                         </button>
                       </div>
                     ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold text-slate-700 border-b pb-2">인벤토리</h3>
+                <div className="space-y-2 bg-slate-50 p-4 rounded-lg">
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                    <input
+                      type="text"
+                      value={newItemName}
+                      onChange={(e) => setNewItemName(e.target.value)}
+                      placeholder="아이템 이름"
+                      className="sm:col-span-2 px-3 py-2 bg-white border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all text-sm"
+                    />
+                    <select
+                      value={newItemType}
+                      onChange={(e) => setNewItemType(e.target.value as InventoryItemType)}
+                      className="px-3 py-2 bg-white border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all text-sm"
+                    >
+                      <option value="equipment">장비</option>
+                      <option value="consumable">소모품</option>
+                    </select>
+                    <input
+                      type="number"
+                      min="1"
+                      value={newItemQuantity}
+                      onChange={(e) => setNewItemQuantity(Number(e.target.value))}
+                      disabled={newItemType === 'equipment'}
+                      className="px-3 py-2 bg-white border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all text-sm disabled:bg-slate-100"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={newItemEquipped}
+                        onChange={(e) => setNewItemEquipped(e.target.checked)}
+                        disabled={newItemType === 'consumable'}
+                        className="rounded border-slate-300"
+                      />
+                      장착
+                    </label>
+                    <input
+                      type="number"
+                      value={newItemModifier}
+                      onChange={(e) => setNewItemModifier(Number(e.target.value))}
+                      placeholder="보정치"
+                      className="px-3 py-2 bg-white border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all text-sm"
+                    />
+                    <input
+                      type="text"
+                      value={newItemDescription}
+                      onChange={(e) => setNewItemDescription(e.target.value)}
+                      placeholder="설명"
+                      className="px-3 py-2 bg-white border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all text-sm"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={addInventoryItem}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg transition-colors text-sm font-medium"
+                  >
+                    인벤토리 추가
+                  </button>
+                </div>
+                {inventory.length > 0 && (
+                  <div className="space-y-2">
+                    {inventory.map((item, index) => {
+                      const itemModifier = Number(item.modifier ?? 0);
+                      return (
+                      <div key={`${item.name}-${index}`} className="bg-white border border-slate-200 p-3 rounded-lg text-sm flex justify-between gap-2">
+                        <div>
+                          <div className="font-semibold text-slate-800">{item.name}</div>
+                          <div className="text-xs text-slate-600">
+                            {item.type === 'consumable' ? `소모품 x${item.quantity}` : `장비${item.equipped ? ' (장착)' : ''}`}
+                            {itemModifier !== 0 ? ` · 보정 ${itemModifier >= 0 ? '+' : ''}${itemModifier}` : ''}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeInventoryItem(index)}
+                          className="text-red-600 hover:text-red-800 font-bold"
+                        >
+                          ×
+                        </button>
+                      </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -881,19 +1160,70 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
                   </div>
                 )}
                 
-                {/* 약점 */}
-                {character.data.weaknesses && character.data.weaknesses.length > 0 && (
+                {((character.data.statuses && character.data.statuses.length > 0) || (character.data.weaknesses && character.data.weaknesses.length > 0)) && (
                   <div className="mt-2">
-                    <p className="text-xs text-slate-500 mb-1">약점:</p>
+                    <p className="text-xs text-slate-500 mb-1">상태:</p>
                     <div className="flex flex-wrap gap-1">
-                      {character.data.weaknesses.map((weakness, idx) => {
-                        const weaknessName = typeof weakness === 'string' ? weakness : weakness.name;
-                        const mitigation = typeof weakness === 'string' ? 0 : (weakness.mitigation ?? 0);
-                        const label = mitigation > 0 ? `${weaknessName} (${mitigation}/3)` : weaknessName;
+                      {(character.data.statuses && character.data.statuses.length > 0
+                        ? character.data.statuses.map((status) => ({
+                            name: status.name,
+                            type: status.type === 'buff' ? 'buff' : 'debuff',
+                            modifier: Number(status.modifier ?? 0),
+                          }))
+                        : (character.data.weaknesses || []).map((weakness) => ({
+                            name: typeof weakness === 'string' ? weakness : weakness.name,
+                            type: 'debuff' as const,
+                            modifier: -1,
+                          }))
+                      ).map((status, idx) => {
+                        const statusName = status.name;
+                        const statusType = status.type;
+                        const modifier = status.modifier;
                         return (
-                          <span key={`${weaknessName}-${idx}`} className="bg-red-100 text-red-800 px-2 py-0.5 rounded text-xs">
-                            {label}
+                          <span
+                            key={`${statusName}-${idx}`}
+                            className={`${statusType === 'buff' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'} px-2 py-0.5 rounded text-xs`}
+                          >
+                            {statusName} ({modifier >= 0 ? '+' : ''}{modifier})
                           </span>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {character.data.inventory && character.data.inventory.length > 0 && (
+                  <div className="mt-2">
+                    <p className="text-xs text-slate-500 mb-1">인벤토리:</p>
+                    <div className="space-y-1">
+                      {character.data.inventory.map((item, idx) => {
+                        if (typeof item === 'string') {
+                          return (
+                            <div key={`${item}-${idx}`} className="text-xs bg-slate-50 px-2 py-1 rounded text-slate-700">
+                              {item}
+                            </div>
+                          );
+                        }
+
+                        const quantity = item.type === 'consumable' ? ` x${Math.max(1, Number(item.quantity ?? 1))}` : '';
+                        const equipped = item.type === 'equipment' && item.equipped ? ' (장착)' : '';
+                        const modifier = item.modifier ? ` · ${item.modifier >= 0 ? '+' : ''}${item.modifier}` : '';
+                        const typeLabel = item.type === 'consumable' ? '소모품' : '장비';
+                        const consumeKey = `${character.id}:${item.name}`;
+                        return (
+                          <div key={`${item.name}-${idx}`} className="text-xs bg-slate-50 px-2 py-1 rounded text-slate-700 flex items-center justify-between gap-2">
+                            <span>{item.name} [{typeLabel}]{quantity}{equipped}{modifier}</span>
+                            {item.type === 'consumable' && (
+                              <button
+                                type="button"
+                                disabled={consumingItemKey === consumeKey}
+                                onClick={() => handleConsumeInventoryItem(character.id, item.name)}
+                                className="text-[10px] px-2 py-0.5 rounded bg-indigo-600 text-white disabled:bg-indigo-300"
+                              >
+                                {consumingItemKey === consumeKey ? '사용 중' : '사용'}
+                              </button>
+                            )}
+                          </div>
                         );
                       })}
                     </div>

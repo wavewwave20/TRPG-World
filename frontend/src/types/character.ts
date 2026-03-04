@@ -44,13 +44,37 @@ export interface StatusEffect {
   description?: string;
 }
 
+export type StatusType = 'buff' | 'debuff';
+
+export interface UnifiedStatus {
+  name: string;
+  category: StatusEffectCategory | 'social' | 'environment';
+  type: StatusType;
+  modifier: number;
+  source?: string;
+  applies_to?: AbilityKey[] | 'all';
+  description?: string;
+}
+
+export type InventoryItemType = 'consumable' | 'equipment';
+
+export interface InventoryItem {
+  name: string;
+  quantity?: number;
+  type?: InventoryItemType;
+  equipped?: boolean;
+  modifier?: number;
+  status?: UnifiedStatus;
+  action_modifiers?: Partial<Record<AbilityKey, number>>;
+  description?: string;
+}
+
 export interface Weakness {
   name: string;
-  mitigation: number;  // 0 = 미완화, 1~2 = 부분 완화, 3+ = 극복
 }
 
 export interface CharacterData {
-  inventory?: string[];
+  inventory?: (string | InventoryItem)[];
   age?: number;
   race?: string;
   concept?: string;
@@ -65,6 +89,7 @@ export interface CharacterData {
   skills: Skill[];
   weaknesses: (string | Weakness)[];
   status_effects: (string | StatusEffect)[];
+  statuses?: UnifiedStatus[];
   skill_cooldowns?: Record<string, number>;
 }
 

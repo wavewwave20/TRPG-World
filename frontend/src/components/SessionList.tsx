@@ -23,6 +23,12 @@ interface SessionParticipantsUpdate {
   participants?: Array<{ user_id: number; character_id: number; character_name: string }>;
 }
 
+interface SessionParticipantCountUpdate {
+  session_id: number;
+  participant_count?: number;
+  is_active?: boolean;
+}
+
 interface SessionListProps {
   onJoinSuccess?: () => void;
 }
@@ -115,7 +121,7 @@ export default function SessionList({ onJoinSuccess }: SessionListProps) {
     };
   }, [loadSessions]);
 
-  // Listen for session_ended events to update the session list
+  // Listen for realtime session changes to keep lobby list responsive.
   useEffect(() => {
     if (!socket) return;
 
@@ -152,16 +158,55 @@ export default function SessionList({ onJoinSuccess }: SessionListProps) {
       );
     };
 
+    const handleParticipantCountUpdated = (data: SessionParticipantCountUpdate) => {
+      const participantCount = data.participant_count;
+      let shouldReload = false;
+
+      setSessions((prevSessions) => {
+        if (data.is_active === false) {
+          return prevSessions.filter((session) => session.id !== data.session_id);
+        }
+
+        const target = prevSessions.find((session) => session.id === data.session_id);
+        if (!target) {
+          shouldReload = true;
+          return prevSessions;
+        }
+
+        if (participantCount === undefined) {
+          return prevSessions;
+        }
+
+        return prevSessions.map((session) =>
+          session.id === data.session_id
+            ? { ...session, participant_count: participantCount }
+            : session
+        );
+      });
+
+      if (shouldReload) {
+        void loadSessions();
+      }
+    };
+
+    const handleSessionCatalogUpdated = () => {
+      void loadSessions();
+    };
+
     socket.on('session_ended', handleSessionEnded);
     socket.on('user_joined', handleUserJoined);
     socket.on('user_left', handleUserLeft);
+    socket.on('session_participant_count_updated', handleParticipantCountUpdated);
+    socket.on('session_catalog_updated', handleSessionCatalogUpdated);
 
     return () => {
       socket.off('session_ended', handleSessionEnded);
       socket.off('user_joined', handleUserJoined);
       socket.off('user_left', handleUserLeft);
+      socket.off('session_participant_count_updated', handleParticipantCountUpdated);
+      socket.off('session_catalog_updated', handleSessionCatalogUpdated);
     };
-  }, [socket]);
+  }, [loadSessions, socket]);
 
   const handleJoinSession = async (id: number, title: string, hostUserId: number) => {
     setError(null);

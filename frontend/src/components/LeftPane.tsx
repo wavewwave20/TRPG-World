@@ -164,7 +164,8 @@ export default function LeftPane() {
                   <ul className="divide-y divide-slate-100">
                     {displayCharacter.data.inventory?.map((item, index) => (
                       <li key={index} className="text-slate-700 px-4 py-3 hover:bg-slate-50 flex items-center gap-2 transition-colors text-sm">
-                        <span className="text-blue-400 text-xs">●</span> {item}
+                        <span className="text-blue-400 text-xs">●</span>
+                        {typeof item === 'string' ? item : `${item.name}${item.quantity && item.quantity > 1 ? ` x${item.quantity}` : ''}`}
                       </li>
                     ))}
                   </ul>

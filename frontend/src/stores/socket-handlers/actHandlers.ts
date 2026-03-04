@@ -1,9 +1,156 @@
 import type { Socket } from 'socket.io-client';
 import type { StoryActInfo, GrowthReward } from '../../types/act';
+import type { Character, AbilityKey } from '../../types/character';
 import { useGameStore } from '../gameStore';
 import { useAuthStore } from '../authStore';
 import { useActStore } from '../actStore';
-import { getCharacter, getGrowthHistory } from '../../services/api';
+import { getCharacter, getCurrentAct, getGrowthHistory } from '../../services/api';
+
+const appliedGrowthBatchKeys = new Set<string>();
+
+function growthBatchKey(sessionId: number, newActId: number): string {
+  return `${sessionId}:${newActId}`;
+}
+
+function applyGrowthRewardToCharacter(character: Character, reward: GrowthReward): Character {
+  if (character.id !== reward.characterId) {
+    return character;
+  }
+
+  const nextData = { ...character.data };
+
+  if (reward.growthType === 'ability_increase') {
+    const ability = reward.growthDetail?.ability as AbilityKey | undefined;
+    const deltaRaw = reward.growthDetail?.delta;
+    const delta = typeof deltaRaw === 'number' ? deltaRaw : 1;
+    if (ability && typeof nextData[ability] === 'number') {
+      nextData[ability] = Math.min(20, nextData[ability] + delta);
+    }
+  } else if (reward.growthType === 'new_skill') {
+    const rawSkill = reward.growthDetail?.skill;
+    if (rawSkill && typeof rawSkill === 'object') {
+      const skillName = String((rawSkill as Record<string, unknown>).name ?? '').trim();
+      if (skillName) {
+        const skills = Array.isArray(nextData.skills) ? [...nextData.skills] : [];
+        if (!skills.some((skill) => skill.name === skillName)) {
+          skills.push({
+            type: String((rawSkill as Record<string, unknown>).type ?? 'active'),
+            name: skillName,
+            description: String((rawSkill as Record<string, unknown>).description ?? ''),
+          });
+          nextData.skills = skills;
+        }
+      }
+    }
+  }
+
+  return {
+    ...character,
+    data: nextData,
+  };
+}
+
+function applyGrowthRewardsOptimistically(rewards: GrowthReward[]): void {
+  if (rewards.length === 0) {
+    return;
+  }
+
+  const state = useGameStore.getState();
+  const currentCharacter = state.currentCharacter;
+  if (currentCharacter) {
+    let updated = currentCharacter;
+    for (const reward of rewards) {
+      updated = applyGrowthRewardToCharacter(updated, reward);
+    }
+    useGameStore.getState().setCharacter(updated);
+  }
+
+  const selectedParticipant = state.selectedParticipant;
+  if (selectedParticipant?.character) {
+    let updated = selectedParticipant.character;
+    for (const reward of rewards) {
+      updated = applyGrowthRewardToCharacter(updated, reward);
+    }
+    useGameStore.getState().setSelectedParticipant({
+      ...selectedParticipant,
+      character: updated,
+    });
+  }
+
+  const participants = state.participants;
+  const nextParticipants = participants.map((participant) => {
+    if (!participant.character) {
+      return participant;
+    }
+    let updatedCharacter = participant.character;
+    for (const reward of rewards) {
+      updatedCharacter = applyGrowthRewardToCharacter(updatedCharacter, reward);
+    }
+    return {
+      ...participant,
+      character: updatedCharacter,
+    };
+  });
+  useGameStore.getState().setParticipants(nextParticipants);
+}
+
+function applyGrowthRewardsOptimisticallyOnce(
+  sessionId: number,
+  newActId: number,
+  rewards: GrowthReward[]
+): void {
+  if (newActId <= 0 || rewards.length === 0) {
+    return;
+  }
+
+  const key = growthBatchKey(sessionId, newActId);
+  if (appliedGrowthBatchKeys.has(key)) {
+    return;
+  }
+  appliedGrowthBatchKeys.add(key);
+  applyGrowthRewardsOptimistically(rewards);
+}
+
+async function hydratePendingTransitionIfMissing(sessionId: number): Promise<void> {
+  const actState = useActStore.getState();
+  const pending = actState.pendingTransition;
+
+  if (pending && pending.newAct.id !== -1) {
+    return;
+  }
+
+  try {
+    const [currentAct, history] = await Promise.all([getCurrentAct(sessionId), getGrowthHistory(sessionId)]);
+    if (!currentAct || history.length === 0) {
+      return;
+    }
+
+    const latestHistory = [...history]
+      .sort((a, b) => b.actNumber - a.actNumber)
+      .find((entry) => entry.actNumber + 1 === currentAct.act_number);
+
+    if (!latestHistory) {
+      return;
+    }
+
+    const newAct: StoryActInfo = {
+      id: currentAct.id,
+      actNumber: currentAct.act_number,
+      title: currentAct.title,
+      subtitle: currentAct.subtitle,
+      startedAt: currentAct.started_at,
+    };
+
+    useActStore.getState().setPendingTransition({
+      newAct,
+      rewards: latestHistory.rewards,
+    });
+    useActStore.getState().setGrowthHistory(history);
+    applyGrowthRewardsOptimisticallyOnce(sessionId, newAct.id, latestHistory.rewards);
+  } catch (err) {
+    console.error('Failed to hydrate pending act transition:', err);
+  }
+}
 
 export function registerActHandlers(socket: Socket) {
   socket.on('act_transition_started', (data: {
@@ -50,8 +197,14 @@ export function registerActHandlers(socket: Socket) {
     useActStore.getState().setTransitioning(false);
   });
 
-  socket.on('act_transition_display_start', (data: { session_id: number }) => {
+  socket.on('act_transition_display_start', async (data: { session_id: number }) => {
     console.log('Act transition display start:', data);
+    const currentSessionId = useGameStore.getState().currentSession?.id;
+    if (currentSessionId && currentSessionId !== data.session_id) {
+      return;
+    }
+
+    await hydratePendingTransitionIfMissing(data.session_id);
     useActStore.getState().runPendingTransition();
   });
 
@@ -116,6 +269,7 @@ export function registerActHandlers(socket: Socket) {
       actState.setTransitionCompletedTitle(null);
     }
     actState.setPendingTransition({ newAct, rewards });
+    applyGrowthRewardsOptimisticallyOnce(data.session_id, newAct.id, rewards);
 
     useGameStore.getState().addNotification({
       type: 'system',
@@ -146,8 +300,9 @@ export function registerActHandlers(socket: Socket) {
 
     const shouldRefreshCurrent = !!currentCharacter && currentCharacter.id === data.character_id;
     const shouldRefreshSelected = !!selectedParticipant?.character && selectedParticipant.character.id === data.character_id;
+    const shouldRefreshParticipants = gameState.participants.some((p) => p.character_id === data.character_id);
 
-    if (!shouldRefreshCurrent && !shouldRefreshSelected) {
+    if (!shouldRefreshCurrent && !shouldRefreshSelected && !shouldRefreshParticipants) {
       return;
     }
 

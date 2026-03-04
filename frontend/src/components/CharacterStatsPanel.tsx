@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import type { Character, AbilityKey, StatusEffect } from '../types/character';
+import type { Character, AbilityKey, UnifiedStatus } from '../types/character';
 import { ABILITY_SHORT_LABELS } from '../types/character';
 import { useStoryStore } from '../stores/storyStore';
 
@@ -13,6 +13,54 @@ export default function CharacterStatsPanel({ character }: CharacterStatsPanelPr
   const { data } = character;
   const entries = useStoryStore((state) => state.entries);
   const currentNarrativeTurn = useMemo(() => entries.filter((e) => e.role === 'AI').length, [entries]);
+  const unifiedStatuses = useMemo<UnifiedStatus[]>(() => {
+    const typed = Array.isArray(data.statuses) ? data.statuses : [];
+    if (typed.length > 0) {
+      return typed;
+    }
+
+    const fallback: UnifiedStatus[] = [];
+    for (const weakness of data.weaknesses || []) {
+      const name = typeof weakness === 'string' ? weakness : weakness.name;
+      if (!name) {
+        continue;
+      }
+      fallback.push({
+        name,
+        category: 'mental',
+        type: 'debuff',
+        modifier: -1,
+        source: 'weakness',
+      });
+    }
+
+    for (const effect of data.status_effects || []) {
+      if (typeof effect === 'string') {
+        if (!effect.trim()) {
+          continue;
+        }
+        fallback.push({
+          name: effect,
+          category: 'physical',
+          type: 'debuff',
+          modifier: 0,
+          source: 'legacy',
+        });
+        continue;
+      }
+
+      fallback.push({
+        name: effect.name,
+        category: effect.category,
+        type: (effect.modifier ?? 0) > 0 ? 'buff' : 'debuff',
+        modifier: Number(effect.modifier ?? 0),
+        description: effect.description,
+        source: 'status_effect',
+      });
+    }
+
+    return fallback;
+  }, [data.statuses, data.status_effects, data.weaknesses]);
 
   // Ability scores in display order
   const abilityScores = [
@@ -155,28 +203,19 @@ export default function CharacterStatsPanel({ character }: CharacterStatsPanelPr
         )}
 
         {/* Weaknesses */}
-        {data.weaknesses && data.weaknesses.length > 0 && (
+        {(!data.statuses || data.statuses.length === 0) && data.weaknesses && data.weaknesses.length > 0 && (
           <div role="group" aria-labelledby="weaknesses-heading">
             <h4 id="weaknesses-heading" className="text-xs font-semibold text-slate-500 uppercase mb-2">약점</h4>
             <div className="flex flex-wrap gap-1.5" role="list" aria-label={`약점 목록, 총 ${data.weaknesses.length}개`}>
               {data.weaknesses.map((weakness, index) => {
                 const name = typeof weakness === 'string' ? weakness : weakness.name;
-                const mitigation = typeof weakness === 'string' ? 0 : weakness.mitigation ?? 0;
-                const isOvercome = mitigation >= 3;
                 return (
                   <span
                     key={index}
-                    className={`px-2 py-1 rounded text-xs font-medium ${
-                      isOvercome
-                        ? 'bg-green-100 text-green-700 line-through'
-                        : mitigation > 0
-                          ? 'bg-orange-100 text-orange-800'
-                          : 'bg-red-100 text-red-800'
-                    }`}
+                    className="px-2 py-1 rounded text-xs font-medium bg-red-100 text-red-800"
                     role="listitem"
-                    title={mitigation > 0 ? `완화: ${mitigation}/3` : undefined}
                   >
-                    {name}{mitigation > 0 && !isOvercome && ` (${mitigation}/3)`}{isOvercome && ' (극복)'}
+                    {name}
                   </span>
                 );
               })}
@@ -184,76 +223,34 @@ export default function CharacterStatsPanel({ character }: CharacterStatsPanelPr
           </div>
         )}
 
-        {/* Status Effects */}
-        {data.status_effects && data.status_effects.length > 0 && (() => {
-          const structured: StatusEffect[] = [];
-          const plain: string[] = [];
-          for (const effect of data.status_effects) {
-            if (typeof effect === 'string') {
-              plain.push(effect);
-            } else {
-              structured.push(effect);
-            }
-          }
-          const physical = structured.filter(e => e.category === 'physical');
-          const mental = structured.filter(e => e.category === 'mental');
-
-          const severityColor = (severity: number) => {
-            if (severity <= -2) return 'bg-red-200 text-red-900';
-            if (severity === -1) return 'bg-orange-100 text-orange-800';
-            if (severity === 0) return 'bg-slate-100 text-slate-600';
-            if (severity === 1) return 'bg-green-100 text-green-800';
-            return 'bg-emerald-200 text-emerald-900';
-          };
-
-          const renderStructured = (effects: StatusEffect[], label: string) => (
-            effects.length > 0 && (
-              <div className="space-y-1">
-                <span className="text-xs text-slate-400">{label}</span>
-                <div className="flex flex-wrap gap-1.5" role="list">
-                  {effects.map((effect, i) => (
-                    <span
-                      key={i}
-                      className={`px-2 py-1 rounded text-xs font-medium ${severityColor(effect.severity)}`}
-                      role="listitem"
-                      title={effect.description || `${effect.name} (${effect.severity > 0 ? '+' : ''}${effect.severity})`}
-                    >
-                      {effect.name}
-                      {effect.severity !== 0 && (
-                        <span className="ml-1 opacity-75">
-                          {effect.severity > 0 ? '+' : ''}{effect.severity}
-                        </span>
-                      )}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )
-          );
-
-          return (
-            <div role="group" aria-labelledby="status-effects-heading">
-              <h4 id="status-effects-heading" className="text-xs font-semibold text-slate-500 uppercase mb-2">상태 효과</h4>
-              <div className="space-y-2">
-                {renderStructured(physical, '육체적')}
-                {renderStructured(mental, '정신적')}
-                {plain.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5" role="list">
-                    {plain.map((effect, i) => (
-                      <span
-                        key={i}
-                        className="bg-amber-100 text-amber-800 px-2 py-1 rounded text-xs font-medium"
-                        role="listitem"
-                      >
-                        {effect}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
+        {unifiedStatuses.length > 0 && (
+          <div role="group" aria-labelledby="status-effects-heading">
+            <h4 id="status-effects-heading" className="text-xs font-semibold text-slate-500 uppercase mb-2">상태</h4>
+            <div className="flex flex-wrap gap-1.5" role="list" aria-label={`상태 목록, 총 ${unifiedStatuses.length}개`}>
+              {unifiedStatuses.map((status, index) => {
+                const isBuff = status.type === 'buff';
+                const isDebuff = status.type === 'debuff';
+                const style = isBuff
+                  ? 'bg-green-100 text-green-800'
+                  : isDebuff
+                    ? 'bg-red-100 text-red-800'
+                    : 'bg-slate-100 text-slate-700';
+                const modifier = typeof status.modifier === 'number' ? status.modifier : 0;
+                const modifierText = modifier === 0 ? '' : ` ${modifier > 0 ? '+' : ''}${modifier}`;
+                return (
+                  <span
+                    key={`${status.name}-${index}`}
+                    className={`px-2 py-1 rounded text-xs font-medium ${style}`}
+                    role="listitem"
+                    title={`${status.type}${status.description ? ` · ${status.description}` : ''}`}
+                  >
+                    {status.name}{modifierText}
+                  </span>
+                );
+              })}
             </div>
-          );
-        })()}
+          </div>
+        )}
       </div>
     </div>
   );
