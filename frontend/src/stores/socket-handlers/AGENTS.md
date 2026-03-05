@@ -9,7 +9,7 @@ frontend/src/stores/socket-handlers/
 |- index.ts                  # all-domain registration point
 |- sessionHandlers.ts        # session and participant events
 |- judgmentHandlers.ts       # judgment lifecycle events
-|- narrativeHandlers.ts      # story generation events
+|- narrativeHandlers.ts      # narrative_stream_* / narrative_* events
 `- actHandlers.ts            # action queue/moderation events
 ```
 

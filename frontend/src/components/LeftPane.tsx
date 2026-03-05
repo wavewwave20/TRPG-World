@@ -162,12 +162,38 @@ export default function LeftPane() {
               <div className="bg-white border border-slate-200 rounded-lg overflow-hidden shadow-sm">
                 {displayCharacter.data.inventory && displayCharacter.data.inventory.length > 0 ? (
                   <ul className="divide-y divide-slate-100">
-                    {displayCharacter.data.inventory?.map((item, index) => (
-                      <li key={index} className="text-slate-700 px-4 py-3 hover:bg-slate-50 flex items-center gap-2 transition-colors text-sm">
-                        <span className="text-blue-400 text-xs">●</span>
-                        {typeof item === 'string' ? item : `${item.name}${item.quantity && item.quantity > 1 ? ` x${item.quantity}` : ''}`}
-                      </li>
-                    ))}
+                    {displayCharacter.data.inventory?.map((item, index) => {
+                      if (typeof item === 'string') {
+                        return (
+                          <li
+                            key={index}
+                            className="text-slate-700 px-4 py-3 hover:bg-slate-50 flex items-center gap-2 transition-colors text-sm"
+                          >
+                            <span className="text-blue-400 text-xs">●</span>
+                            {item}
+                          </li>
+                        );
+                      }
+
+                      const quantity = item.quantity && item.quantity > 1 ? ` x${item.quantity}` : '';
+                      const typeLabel = item.type === 'consumable' ? '소모품' : '장비';
+                      return (
+                        <li
+                          key={index}
+                          className="text-slate-700 px-4 py-3 hover:bg-slate-50 flex items-start gap-2 transition-colors text-sm"
+                        >
+                          <span className="text-blue-400 text-xs mt-1">●</span>
+                          <div className="min-w-0">
+                            <div>
+                              {item.name} [{typeLabel}]{quantity}
+                            </div>
+                            {item.description && (
+                              <div className="text-xs text-slate-500 mt-0.5">{item.description}</div>
+                            )}
+                          </div>
+                        </li>
+                      );
+                    })}
                   </ul>
                 ) : (
                   <div className="text-sm text-slate-400 italic p-6 text-center bg-slate-50">

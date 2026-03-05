@@ -31,11 +31,14 @@ export default function LLMSettingsPage({ onBack }: LLMSettingsPageProps) {
   const [models, setModels] = useState<ModelResponse[]>([]);
   const [activeStoryModel, setActiveStoryModel] = useState<ModelResponse | null>(null);
   const [activeJudgmentModel, setActiveJudgmentModel] = useState<ModelResponse | null>(null);
+  const [activeImageModel, setActiveImageModel] = useState<ModelResponse | null>(null);
   const [activeStorySource, setActiveStorySource] = useState('environment');
   const [activeJudgmentSource, setActiveJudgmentSource] = useState('environment');
+  const [activeImageSource, setActiveImageSource] = useState('environment');
   const [envModel, setEnvModel] = useState<string | null>(null);
   const [envStoryModel, setEnvStoryModel] = useState<string | null>(null);
   const [envJudgmentModel, setEnvJudgmentModel] = useState<string | null>(null);
+  const [envImageModel, setEnvImageModel] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -66,11 +69,14 @@ export default function LLMSettingsPage({ onBack }: LLMSettingsPageProps) {
       setModels(data.models);
       setActiveStoryModel(data.active_story_model);
       setActiveJudgmentModel(data.active_judgment_model);
+      setActiveImageModel(data.active_image_model);
       setActiveStorySource(data.active_story_source);
       setActiveJudgmentSource(data.active_judgment_source);
+      setActiveImageSource(data.active_image_source);
       setEnvModel(data.env_model);
       setEnvStoryModel(data.env_story_model);
       setEnvJudgmentModel(data.env_judgment_model);
+      setEnvImageModel(data.env_image_model);
       setError('');
     } catch (e: any) {
       setError(e.message || 'Failed to load settings');
@@ -184,6 +190,26 @@ export default function LLMSettingsPage({ onBack }: LLMSettingsPageProps) {
     }
   };
 
+  const handleActivateImage = async (id: number) => {
+    if (!userId) return;
+    try {
+      await activateModel(userId, id, 'image');
+      await fetchSettings();
+    } catch (e: any) {
+      setError(e.message || 'Failed to activate model');
+    }
+  };
+
+  const handleDeactivateImage = async (id: number) => {
+    if (!userId) return;
+    try {
+      await deactivateModel(userId, id, 'image');
+      await fetchSettings();
+    } catch (e: any) {
+      setError(e.message || 'Failed to deactivate model');
+    }
+  };
+
   const handleTest = async (id: number) => {
     if (!userId) return;
     setTestingModelId(id);
@@ -229,7 +255,7 @@ export default function LLMSettingsPage({ onBack }: LLMSettingsPageProps) {
       )}
 
       {/* Current Active Models */}
-      <div className="mb-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div className="mb-6 grid grid-cols-1 sm:grid-cols-3 gap-3">
         {/* Story Model */}
         <div className={`p-4 rounded-xl border-2 ${activeStorySource === 'database' ? 'border-indigo-300 bg-indigo-50/40' : 'border-slate-200 bg-slate-50'}`}>
           <div className="flex items-center gap-2 mb-2">
@@ -258,6 +284,21 @@ export default function LLMSettingsPage({ onBack }: LLMSettingsPageProps) {
           </div>
           <div className="text-xs text-slate-400 font-mono truncate mt-0.5">
             {activeJudgmentModel?.model_id || envJudgmentModel || envModel || 'gpt-4o-mini'}
+          </div>
+        </div>
+        {/* Image Model */}
+        <div className={`p-4 rounded-xl border-2 ${activeImageSource === 'database' ? 'border-emerald-300 bg-emerald-50/40' : 'border-slate-200 bg-slate-50'}`}>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Image</span>
+            <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${activeImageSource === 'database' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+              {activeImageSource === 'database' ? 'DB' : 'ENV'}
+            </span>
+          </div>
+          <div className="font-semibold text-slate-800 text-sm truncate">
+            {activeImageModel?.display_name || envImageModel || 'gpt-image-1'}
+          </div>
+          <div className="text-xs text-slate-400 font-mono truncate mt-0.5">
+            {activeImageModel?.model_id || envImageModel || 'gpt-image-1'}
           </div>
         </div>
       </div>
@@ -473,19 +514,28 @@ export default function LLMSettingsPage({ onBack }: LLMSettingsPageProps) {
               {models.map((model) => {
                 const isStory = model.is_active_story;
                 const isJudgment = model.is_active_judgment;
-                const hasRole = isStory || isJudgment;
+                const isImage = model.is_active_image;
+                const hasRole = isStory || isJudgment || isImage;
 
                 return (
                   <div
                     key={model.id}
                     className={`p-4 bg-white border-2 rounded-xl shadow-sm transition-colors ${
-                      isStory && isJudgment
-                        ? 'border-purple-300 bg-purple-50/20'
-                        : isStory
-                          ? 'border-indigo-300 bg-indigo-50/20'
-                          : isJudgment
-                            ? 'border-amber-300 bg-amber-50/20'
-                            : 'border-slate-200'
+                      isStory && isJudgment && isImage
+                        ? 'border-fuchsia-300 bg-fuchsia-50/20'
+                        : isStory && isJudgment
+                          ? 'border-purple-300 bg-purple-50/20'
+                          : isStory && isImage
+                            ? 'border-cyan-300 bg-cyan-50/20'
+                            : isJudgment && isImage
+                              ? 'border-teal-300 bg-teal-50/20'
+                              : isStory
+                                ? 'border-indigo-300 bg-indigo-50/20'
+                                : isJudgment
+                                  ? 'border-amber-300 bg-amber-50/20'
+                                  : isImage
+                                    ? 'border-emerald-300 bg-emerald-50/20'
+                                    : 'border-slate-200'
                     }`}
                   >
                     {/* Header */}
@@ -552,7 +602,7 @@ export default function LLMSettingsPage({ onBack }: LLMSettingsPageProps) {
                     )}
 
                     {/* Role Toggle Buttons */}
-                    <div className="flex gap-2 mt-3">
+                    <div className="grid grid-cols-3 gap-2 mt-3">
                       <button
                         onClick={() => isStory ? handleDeactivate(model.id) : handleActivate(model.id)}
                         disabled={!isStory && !model.has_api_key}
@@ -576,6 +626,18 @@ export default function LLMSettingsPage({ onBack }: LLMSettingsPageProps) {
                         title={!model.has_api_key && !isJudgment ? 'Set an API key first' : ''}
                       >
                         {isJudgment ? 'Judgment ✓' : 'Judgment'}
+                      </button>
+                      <button
+                        onClick={() => isImage ? handleDeactivateImage(model.id) : handleActivateImage(model.id)}
+                        disabled={!isImage && !model.has_api_key}
+                        className={`flex-1 py-2 rounded-lg text-xs font-semibold border-2 transition-all ${
+                          isImage
+                            ? 'bg-emerald-100 text-emerald-800 border-emerald-300 hover:bg-emerald-200'
+                            : 'bg-white text-slate-400 border-slate-200 hover:border-emerald-300 hover:text-emerald-600 disabled:opacity-30 disabled:cursor-not-allowed'
+                        }`}
+                        title={!model.has_api_key && !isImage ? 'Set an API key first' : ''}
+                      >
+                        {isImage ? 'Image ✓' : 'Image'}
                       </button>
                     </div>
                   </div>

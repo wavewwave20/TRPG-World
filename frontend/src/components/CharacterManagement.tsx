@@ -23,6 +23,7 @@ interface EditableStatus {
   name: string;
   type: 'buff' | 'debuff';
   modifier: number;
+  description: string;
 }
 
 interface EditableInventoryItem extends InventoryItem {
@@ -56,6 +57,25 @@ interface Character {
   created_at: string;
 }
 
+interface AIGeneratedCharacterDraft {
+  name?: string;
+  age?: number;
+  race?: string;
+  concept?: string;
+  strength?: number;
+  dexterity?: number;
+  constitution?: number;
+  intelligence?: number;
+  wisdom?: number;
+  charisma?: number;
+  skills?: Array<{
+    type?: string;
+    name?: string;
+    description?: string;
+    ability?: string;
+  }>;
+}
+
 interface CharacterManagementProps {
   onSelectCharacter: (character: BaseCharacter & { user_id: number; created_at: string }) => void;
 }
@@ -64,6 +84,8 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
   const [characters, setCharacters] = useState<Character[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const [showCreateModeSelector, setShowCreateModeSelector] = useState(false);
+  const [showAICreateForm, setShowAICreateForm] = useState(false);
   const [editingCharacter, setEditingCharacter] = useState<Character | null>(null);
   
   // Form state
@@ -91,6 +113,7 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
   const [newStatusName, setNewStatusName] = useState('');
   const [newStatusType, setNewStatusType] = useState<'buff' | 'debuff'>('debuff');
   const [newStatusModifier, setNewStatusModifier] = useState(-1);
+  const [newStatusDescription, setNewStatusDescription] = useState('');
 
   const [inventory, setInventory] = useState<EditableInventoryItem[]>([]);
   const [newItemName, setNewItemName] = useState('');
@@ -99,6 +122,9 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
   const [newItemEquipped, setNewItemEquipped] = useState(false);
   const [newItemModifier, setNewItemModifier] = useState(0);
   const [newItemDescription, setNewItemDescription] = useState('');
+  const [aiConceptText, setAIConceptText] = useState('');
+  const [aiCreating, setAICreating] = useState(false);
+  const [aiDraftReady, setAIDraftReady] = useState(false);
   
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -134,6 +160,61 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
     }
   };
 
+  const normalizeGeneratedSkills = (value: AIGeneratedCharacterDraft['skills']): Skill[] => {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value
+      .filter((skill): skill is NonNullable<AIGeneratedCharacterDraft['skills']>[number] => Boolean(skill))
+      .map((skill) => {
+        const rawType = (skill.type || '').toLowerCase();
+        const type: 'passive' | 'active' = rawType === 'active' ? 'active' : 'passive';
+        const name = String(skill.name || '').trim();
+        const description = String(skill.description || '').trim();
+        const abilityCandidate = String(skill.ability || '').toLowerCase();
+        const ability =
+          abilityCandidate && abilityCandidate in ABILITY_LABELS ? (abilityCandidate as AbilityKey) : undefined;
+
+        return {
+          type,
+          name,
+          description,
+          ...(ability ? { ability } : {}),
+        };
+      })
+      .filter((skill) => skill.name.length > 0);
+  };
+
+  const clampAbilityScore = (value: unknown, fallback: number): number => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+      return fallback;
+    }
+    return Math.max(1, Math.min(30, Math.round(parsed)));
+  };
+
+  const applyAIGeneratedDraftToForm = (draft: AIGeneratedCharacterDraft) => {
+    const safeName = String(draft.name || '').trim();
+    const safeRace = String(draft.race || '').trim();
+    const safeConcept = String(draft.concept || '').trim();
+    const parsedAge = Number(draft.age);
+
+    setName(safeName || '이름없는 모험가');
+    setAge(Number.isFinite(parsedAge) ? Math.max(1, Math.round(parsedAge)) : 25);
+    setRace(safeRace || '인간');
+    setConcept(safeConcept);
+    setStrength(clampAbilityScore(draft.strength, 10));
+    setDexterity(clampAbilityScore(draft.dexterity, 10));
+    setConstitution(clampAbilityScore(draft.constitution, 10));
+    setIntelligence(clampAbilityScore(draft.intelligence, 10));
+    setWisdom(clampAbilityScore(draft.wisdom, 10));
+    setCharisma(clampAbilityScore(draft.charisma, 10));
+    setSkills(normalizeGeneratedSkills(draft.skills));
+    setStatuses([]);
+    setInventory([]);
+  };
+
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -162,6 +243,7 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
             type: status.type,
             modifier: status.modifier,
             category: status.modifier >= 0 ? 'physical' : 'mental',
+            description: status.description?.trim() || undefined,
           })),
           inventory: inventory.map((item) => ({
             name: item.name,
@@ -185,6 +267,48 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
       setNotice('캐릭터가 생성되었습니다.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create character');
+    }
+  };
+
+  const handleCreateWithAI = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!userId) return;
+
+    const conceptText = aiConceptText.trim();
+    if (!conceptText) {
+      setError('컨셉을 설명해주세요.');
+      return;
+    }
+
+    setError('');
+    setNotice('');
+    setAICreating(true);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/characters/ai-generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: userId,
+          concept_text: conceptText,
+        }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.detail || 'Failed to generate character draft with AI');
+      }
+
+      const draft = (await response.json()) as AIGeneratedCharacterDraft;
+      applyAIGeneratedDraftToForm(draft);
+      setShowAICreateForm(false);
+      setShowCreateModeSelector(false);
+      setShowCreateForm(true);
+      setAIDraftReady(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to generate character draft with AI');
+    } finally {
+      setAICreating(false);
     }
   };
 
@@ -216,6 +340,7 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
             type: status.type,
             modifier: status.modifier,
             category: status.modifier >= 0 ? 'physical' : 'mental',
+            description: status.description?.trim() || undefined,
           })),
           inventory: inventory.map((item) => ({
             name: item.name,
@@ -380,6 +505,30 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
     }
   };
 
+  const openCreateModeSelector = () => {
+    setError('');
+    setNotice('');
+    setAIDraftReady(false);
+    setEditingCharacter(null);
+    setShowCreateForm(false);
+    setShowAICreateForm(false);
+    setShowCreateModeSelector(true);
+  };
+
+  const startDirectCreate = () => {
+    resetForm();
+    setShowCreateModeSelector(false);
+    setShowAICreateForm(false);
+    setShowCreateForm(true);
+  };
+
+  const startAICreate = () => {
+    resetForm();
+    setShowCreateModeSelector(false);
+    setShowCreateForm(false);
+    setShowAICreateForm(true);
+  };
+
   const resetForm = () => {
     setName('');
     setAge(25);
@@ -401,17 +550,24 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
     setNewStatusName('');
     setNewStatusType('debuff');
     setNewStatusModifier(-1);
+    setNewStatusDescription('');
     setNewItemName('');
     setNewItemType('equipment');
     setNewItemQuantity(1);
     setNewItemEquipped(false);
     setNewItemModifier(0);
     setNewItemDescription('');
+    setAIConceptText('');
+    setAICreating(false);
+    setAIDraftReady(false);
     setError('');
     setNotice('');
   };
 
   const startEdit = (character: Character) => {
+    setAIDraftReady(false);
+    setShowCreateModeSelector(false);
+    setShowAICreateForm(false);
     setEditingCharacter(character);
     setName(character.name);
     setAge(character.data.age || 25);
@@ -424,19 +580,25 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
     setWisdom(character.data.wisdom || 10);
     setCharisma(character.data.charisma || 10);
     setSkills(character.data.skills || []);
-    const sourceStatuses: EditableStatus[] = character.data.statuses && character.data.statuses.length > 0
+    const sourceStatuses = character.data.statuses && character.data.statuses.length > 0
       ? character.data.statuses
-          : (character.data.weaknesses || []).map((weakness) =>
-          typeof weakness === 'string'
-            ? { name: weakness, type: 'debuff', modifier: -1 }
-            : { name: weakness.name, type: 'debuff', modifier: -1 },
-        );
+      : (character.data.weaknesses || []).map((weakness) => {
+          if (typeof weakness === 'string') {
+            return { name: weakness, type: 'debuff', modifier: -1, description: '' };
+          }
+          const weaknessDescription =
+            typeof (weakness as { description?: unknown }).description === 'string'
+              ? String((weakness as { description?: string }).description)
+              : '';
+          return { name: weakness.name, type: 'debuff', modifier: -1, description: weaknessDescription };
+        });
     setStatuses(
       sourceStatuses
         .map((status): EditableStatus => ({
           name: status.name,
           type: status.type === 'buff' ? 'buff' : 'debuff',
           modifier: Number(status.modifier ?? 0),
+          description: status.description || '',
         }))
         .filter((status) => status.name.trim()),
     );
@@ -467,6 +629,8 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
 
   const cancelForm = () => {
     setShowCreateForm(false);
+    setShowAICreateForm(false);
+    setShowCreateModeSelector(false);
     setEditingCharacter(null);
     resetForm();
   };
@@ -501,10 +665,12 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
         name,
         type: newStatusType,
         modifier: Number(newStatusModifier || 0),
+        description: newStatusDescription.trim(),
       },
     ]);
     setNewStatusName('');
     setNewStatusModifier(newStatusType === 'buff' ? 1 : -1);
+    setNewStatusDescription('');
   };
 
   const removeStatus = (name: string) => {
@@ -555,6 +721,7 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
     share: `${actionButtonBase} border-slate-300 bg-white text-slate-700 hover:bg-slate-50 focus-visible:ring-slate-300`,
     delete: `${actionButtonBase} border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100 focus-visible:ring-rose-300`,
   };
+  const isAIDraftModal = aiDraftReady && !editingCharacter;
 
   if (loading) {
     return (
@@ -581,12 +748,18 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
           </button>
         </div>
 
-        {/* Create/Edit Form */}
+        {/* Direct Create/Edit Form */}
         {(showCreateForm || editingCharacter) && (
-          <div className="bg-white p-6 rounded-xl shadow-card mb-6 border border-slate-200">
+          <div className={isAIDraftModal ? 'fixed inset-0 z-50 bg-slate-900/40 p-4 sm:p-8 overflow-y-auto' : ''}>
+          <div className={isAIDraftModal ? 'mx-auto w-full max-w-4xl bg-white p-6 rounded-xl shadow-2xl border border-slate-200' : 'bg-white p-6 rounded-xl shadow-card mb-6 border border-slate-200'}>
             <h2 className="text-xl font-bold text-slate-800 mb-4">
-              {editingCharacter ? '캐릭터 수정' : '새 캐릭터 생성'}
+              {editingCharacter ? '캐릭터 수정' : (aiDraftReady ? 'AI 생성 초안' : '직접 생성')}
             </h2>
+            {aiDraftReady && !editingCharacter && (
+              <div className="mb-4 bg-indigo-50 border border-indigo-200 text-indigo-700 px-4 py-3 rounded-lg text-sm">
+                AI가 초안을 만들었습니다. 내용을 수정한 뒤 저장하거나 취소할 수 있습니다.
+              </div>
+            )}
             <form onSubmit={editingCharacter ? handleUpdate : handleCreate} className="space-y-6">
               {/* 기본 정보 */}
               <div className="space-y-4">
@@ -841,6 +1014,13 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
                     className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
                   />
                 </div>
+                <input
+                  type="text"
+                  value={newStatusDescription}
+                  onChange={(e) => setNewStatusDescription(e.target.value)}
+                  placeholder="상태 설명 (선택)"
+                  className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                />
                 <div>
                   <button
                     type="button"
@@ -851,13 +1031,20 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
                   </button>
                 </div>
                 {statuses.length > 0 && (
-                  <div className="flex flex-wrap gap-2">
+                  <div className="space-y-2">
                     {statuses.map((status) => (
                       <div
                         key={status.name}
-                        className={`${status.type === 'buff' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'} px-3 py-1 rounded-full text-sm flex items-center gap-2`}
+                        className={`${status.type === 'buff' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'} px-3 py-2 rounded-lg text-sm flex items-start justify-between gap-3`}
                       >
-                        <span>{status.name} ({status.modifier >= 0 ? '+' : ''}{status.modifier})</span>
+                        <div className="min-w-0">
+                          <div className="font-semibold">
+                            {status.name} ({status.modifier >= 0 ? '+' : ''}{status.modifier})
+                          </div>
+                          {status.description && (
+                            <div className="text-xs opacity-80 mt-0.5">{status.description}</div>
+                          )}
+                        </div>
                         <button
                           type="button"
                           onClick={() => removeStatus(status.name)}
@@ -945,6 +1132,9 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
                             {item.type === 'consumable' ? `소모품 x${item.quantity}` : `장비${item.equipped ? ' (장착)' : ''}`}
                             {itemModifier !== 0 ? ` · 보정 ${itemModifier >= 0 ? '+' : ''}${itemModifier}` : ''}
                           </div>
+                          {item.description && (
+                            <div className="text-xs text-slate-500 mt-0.5">{item.description}</div>
+                          )}
                         </div>
                         <button
                           type="button"
@@ -971,7 +1161,75 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
                   type="submit"
                   className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition-colors shadow-sm"
                 >
-                  {editingCharacter ? '수정' : '생성'}
+                  {editingCharacter ? '수정' : (aiDraftReady ? '저장' : '생성')}
+                </button>
+                <button
+                  type="button"
+                  onClick={cancelForm}
+                  className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-3 px-4 rounded-lg transition-colors border border-slate-300"
+                >
+                  취소
+                </button>
+              </div>
+            </form>
+          </div>
+          </div>
+        )}
+
+        {showCreateModeSelector && !editingCharacter && (
+          <div className="bg-white p-6 rounded-xl shadow-card mb-6 border border-slate-200">
+            <h2 className="text-xl font-bold text-slate-800 mb-4">캐릭터 생성 방식 선택</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={startDirectCreate}
+                className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-lg transition-colors"
+              >
+                직접 생성 (원래 방식)
+              </button>
+              <button
+                type="button"
+                onClick={startAICreate}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-4 rounded-lg transition-colors"
+              >
+                AI와 함께 생성
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={cancelForm}
+              className="mt-3 w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold py-2.5 px-4 rounded-lg transition-colors border border-slate-200"
+            >
+              취소
+            </button>
+          </div>
+        )}
+
+        {showAICreateForm && !editingCharacter && (
+          <div className="bg-white p-6 rounded-xl shadow-card mb-6 border border-slate-200">
+            <h2 className="text-xl font-bold text-slate-800 mb-2">AI와 함께 생성</h2>
+            <p className="text-sm text-slate-500 mb-4">컨셉을 설명해주세요.</p>
+            <form onSubmit={handleCreateWithAI} className="space-y-4">
+              <textarea
+                value={aiConceptText}
+                onChange={(e) => setAIConceptText(e.target.value)}
+                placeholder="예: 어둠 속에서 정보를 수집하는 냉소적인 첩자. 근접전은 약하지만 판단력과 기민함이 뛰어남."
+                className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                rows={5}
+                required
+              />
+              {error && (
+                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
+                  {error}
+                </div>
+              )}
+              <div className="flex gap-3">
+                <button
+                  type="submit"
+                  disabled={aiCreating}
+                  className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg transition-colors shadow-sm"
+                >
+                  {aiCreating ? '생성 중...' : 'AI로 생성'}
                 </button>
                 <button
                   type="button"
@@ -986,16 +1244,16 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
         )}
 
         {/* Create Button */}
-        {!showCreateForm && !editingCharacter && (
+        {!showCreateForm && !editingCharacter && !showCreateModeSelector && !showAICreateForm && (
           <button
-            onClick={() => setShowCreateForm(true)}
+            onClick={openCreateModeSelector}
             className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition-colors mb-6 shadow-sm"
           >
-            + 새 캐릭터 생성
+            + 캐릭터 생성
           </button>
         )}
 
-        {!showCreateForm && !editingCharacter && (
+        {!showCreateForm && !editingCharacter && !showCreateModeSelector && !showAICreateForm && (
           <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-card mb-6">
             <h3 className="text-base font-semibold text-slate-800 mb-3">공유 코드로 캐릭터 받기</h3>
             <div className="flex flex-col sm:flex-row gap-2">
@@ -1031,12 +1289,12 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
         )}
 
         {/* Character List */}
-        {notice && !showCreateForm && !editingCharacter && (
+        {notice && !showCreateForm && !editingCharacter && !showCreateModeSelector && !showAICreateForm && (
           <div className="mb-4 bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg text-sm">
             {notice}
           </div>
         )}
-        {error && !showCreateForm && !editingCharacter && (
+        {error && !showCreateForm && !editingCharacter && !showCreateModeSelector && !showAICreateForm && (
           <div className="mb-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
             {error}
           </div>
@@ -1169,23 +1427,34 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
                             name: status.name,
                             type: status.type === 'buff' ? 'buff' : 'debuff',
                             modifier: Number(status.modifier ?? 0),
+                            description: status.description || '',
                           }))
                         : (character.data.weaknesses || []).map((weakness) => ({
                             name: typeof weakness === 'string' ? weakness : weakness.name,
                             type: 'debuff' as const,
                             modifier: -1,
+                            description:
+                              typeof weakness === 'string'
+                                ? ''
+                                : typeof (weakness as { description?: unknown }).description === 'string'
+                                  ? String((weakness as { description?: string }).description)
+                                  : '',
                           }))
                       ).map((status, idx) => {
                         const statusName = status.name;
                         const statusType = status.type;
                         const modifier = status.modifier;
+                        const statusDescription = status.description;
                         return (
-                          <span
+                          <div
                             key={`${statusName}-${idx}`}
-                            className={`${statusType === 'buff' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'} px-2 py-0.5 rounded text-xs`}
+                            className={`${statusType === 'buff' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'} px-2 py-1 rounded text-xs`}
                           >
-                            {statusName} ({modifier >= 0 ? '+' : ''}{modifier})
-                          </span>
+                            <div className="font-medium">{statusName} ({modifier >= 0 ? '+' : ''}{modifier})</div>
+                            {statusDescription && (
+                              <div className="opacity-80 mt-0.5">{statusDescription}</div>
+                            )}
+                          </div>
                         );
                       })}
                     </div>
@@ -1212,7 +1481,12 @@ export default function CharacterManagement({ onSelectCharacter }: CharacterMana
                         const consumeKey = `${character.id}:${item.name}`;
                         return (
                           <div key={`${item.name}-${idx}`} className="text-xs bg-slate-50 px-2 py-1 rounded text-slate-700 flex items-center justify-between gap-2">
-                            <span>{item.name} [{typeLabel}]{quantity}{equipped}{modifier}</span>
+                            <div className="min-w-0">
+                              <div>{item.name} [{typeLabel}]{quantity}{equipped}{modifier}</div>
+                              {item.description && (
+                                <div className="text-[11px] text-slate-500 mt-0.5">{item.description}</div>
+                              )}
+                            </div>
                             {item.type === 'consumable' && (
                               <button
                                 type="button"

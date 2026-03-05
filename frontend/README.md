@@ -238,12 +238,12 @@ emit('join_session', {
   character_id: 1
 });
 
-// 행동 제출
-emit('submit_player_action', {
+// 행동 제출(큐에 추가)
+emit('submit_action', {
   session_id: 1,
-  character_id: 1,
-  action_text: '문을 연다',
-  action_type: 'dexterity'
+  player_id: 1,
+  character_name: '엘라라',
+  action_text: '문을 연다'
 });
 ```
 
@@ -268,14 +268,16 @@ useEffect(() => {
 
 - `join_session` - 세션 참가
 - `leave_session` - 세션 나가기
-- `submit_player_action` - 행동 제출
+- `submit_action` - 행동 큐 제출
+- `commit_actions` - 방장 큐 확정
 - `roll_dice` - 주사위 굴림
+- `request_narrative_stream` - 이야기 진행/스트리밍
 
 #### 서버 → 클라이언트
 
 - `judgment_ready` - 판정 준비 완료
 - `dice_rolled` - 주사위 굴림 완료
-- `story_generation_complete` - 서술 생성 완료
+- `narrative_complete` - 서술 스트림 완료
 - `participant_joined` - 참가자 입장
 - `participant_left` - 참가자 퇴장
 

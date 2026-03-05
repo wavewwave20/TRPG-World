@@ -3,20 +3,27 @@ import { useGameStore } from '../stores/gameStore';
 import { useSocketStore } from '../stores/socketStore';
 import { useActionStore } from '../stores/actionStore';
 import { useStoryStore } from '../stores/storyStore';
+import { useStoryImageStore } from '../stores/storyImageStore';
 import { useAuthStore } from '../stores/authStore';
 import { useAIStore } from '../stores/aiStore';
-import { getStoryLogs, getCurrentAct, getGrowthHistory } from '../services/api';
+import {
+  getCurrentAct,
+  getGrowthHistory,
+  getSessionImageConcept,
+  getStoryLogs,
+  regenerateSessionImageConcept,
+  updateSessionImageConcept,
+} from '../services/api';
 // SessionCreationForm removed from in-session view
 import ModerationModal from './ModerationModal';
 import ActBanner from './ActBanner';
 import GrowthHistoryDropdown from './GrowthHistoryDropdown';
 import { useActStore } from '../stores/actStore';
-// import TypingText from './TypingText'; // Currently unused
-// import AIGenerationIndicator from './AIGenerationIndicator'; // REMOVED for streaming optimization
 import JudgmentResultsButton from './JudgmentResultsButton';
 import type { JudgmentSummary } from '../services/api';
 import type { JudgmentSetup, JudgmentResult } from '../types/judgment';
 import { isJudgmentResult } from '../types/judgment';
+import type { StoryImageState } from '../stores/storyImageStore';
 
 /**
  * **text** 패턴을 <strong> 태그로 변환하는 렌더러.
@@ -43,13 +50,19 @@ interface StoryEntryForRender {
 interface StoryEntryItemProps {
   entry: StoryEntryForRender;
   currentCharacterId?: number;
+  canGenerateImage: boolean;
+  imageState?: StoryImageState;
   onOpenJudgmentModal: () => void;
+  onGenerateImage: (storyLogId: number) => void;
 }
 
 const StoryEntryItem = memo(function StoryEntryItem({
   entry,
   currentCharacterId,
+  canGenerateImage,
+  imageState,
   onOpenJudgmentModal,
+  onGenerateImage,
 }: StoryEntryItemProps) {
   const entryJudgments = entry.judgments ?? [];
   const allCompleteForEntry =
@@ -61,6 +74,9 @@ const StoryEntryItem = memo(function StoryEntryItem({
       )
     : false;
   const showOpenModal = !allCompleteForEntry && !myCompletedForEntry;
+  const isImageLoading = imageState?.status === 'loading';
+  const imageUrl = imageState?.imageUrl;
+  const imageError = imageState?.status === 'error' ? imageState.error : '';
 
   return (
     <div
@@ -69,11 +85,20 @@ const StoryEntryItem = memo(function StoryEntryItem({
       }`}
     >
       <div
-        className={`text-[10px] font-bold uppercase tracking-wider mb-1 px-1 ${
+        className={`text-[10px] font-bold uppercase tracking-wider mb-1 px-1 w-full flex items-center justify-between gap-2 ${
           entry.role === 'USER' ? 'text-blue-600' : 'text-slate-500'
         }`}
       >
-        {entry.role === 'USER' ? '모험가들' : '던전 마스터'}
+        <span>{entry.role === 'USER' ? '모험가들' : '던전 마스터'}</span>
+        {entry.role === 'AI' && canGenerateImage && (
+          <button
+            onClick={() => onGenerateImage(entry.id)}
+            disabled={isImageLoading}
+            className="text-[11px] font-semibold normal-case rounded-lg border border-emerald-300 bg-emerald-50 text-emerald-800 px-2 py-1 hover:bg-emerald-100 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+          >
+            {isImageLoading ? '이미지 생성 중...' : imageUrl ? '이미지 다시 생성' : '이미지 생성'}
+          </button>
+        )}
       </div>
 
       <div
@@ -100,6 +125,21 @@ const StoryEntryItem = memo(function StoryEntryItem({
           />
         )}
       </div>
+      {entry.role === 'AI' && imageUrl && (
+        <div className="mt-2 w-full max-w-full sm:max-w-3xl rounded-xl border border-slate-200 bg-white p-2 shadow-sm">
+          <img
+            src={imageUrl}
+            alt="생성된 장면 이미지"
+            className="w-full rounded-lg object-cover"
+            loading="lazy"
+          />
+        </div>
+      )}
+      {entry.role === 'AI' && imageError && canGenerateImage && (
+        <div className="mt-2 text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-2 py-1">
+          {imageError}
+        </div>
+      )}
     </div>
   );
 });
@@ -127,8 +167,13 @@ export default function CenterPane() {
   const [selectedSkillName, setSelectedSkillName] = useState('');
   const [showModerationModal, setShowModerationModal] = useState(false);
   const [showSteeringModal, setShowSteeringModal] = useState(false);
+  const [showImageConceptModal, setShowImageConceptModal] = useState(false);
   const [hostInstructionText, setHostInstructionText] = useState('');
   const [isHostInstructionEnabled, setIsHostInstructionEnabled] = useState(false);
+  const [imageConceptText, setImageConceptText] = useState('');
+  const [isImageConceptLoading, setIsImageConceptLoading] = useState(false);
+  const [isImageConceptSaving, setIsImageConceptSaving] = useState(false);
+  const [isImageConceptRegenerating, setIsImageConceptRegenerating] = useState(false);
   const [storyControls, setStoryControls] = useState({
     end_crisis: false,
     focus_main_goal: false,
@@ -152,6 +197,8 @@ export default function CenterPane() {
   const addEntry = useStoryStore((state) => state.addEntry);
   const updateEntry = useStoryStore((state) => state.updateEntry);
   const removeEntry = useStoryStore((state) => state.removeEntry);
+  const storyImages = useStoryImageStore((state) => state.byStoryLogId);
+  const clearStoryImages = useStoryImageStore((state) => state.clear);
   
   const currentUserId = useAuthStore((state) => state.userId);
   
@@ -215,6 +262,8 @@ export default function CenterPane() {
 
   // Load story logs on session change using getStoryLogs API
   useEffect(() => {
+    clearStoryImages();
+
     if (!currentSessionId) {
       setEntries([]);
       isInitialLoadRef.current = false;
@@ -253,7 +302,15 @@ export default function CenterPane() {
     return () => {
       cancelled = true;
     };
-  }, [currentSessionId, setEntries]);
+  }, [clearStoryImages, currentSessionId, setEntries]);
+
+  useEffect(() => {
+    setShowImageConceptModal(false);
+    setImageConceptText('');
+    setIsImageConceptLoading(false);
+    setIsImageConceptSaving(false);
+    setIsImageConceptRegenerating(false);
+  }, [currentSessionId]);
 
   // Load current act on session change
   const setCurrentAct = useActStore((state) => state.setCurrentAct);
@@ -384,11 +441,9 @@ export default function CenterPane() {
     };
 
     socket.on('narrative_stream_started', handleStreamingStarted);
-    socket.on('story_generation_started', handleStreamingStarted);
 
     return () => {
       socket.off('narrative_stream_started', handleStreamingStarted);
-      socket.off('story_generation_started', handleStreamingStarted);
     };
   }, [socket, currentSessionId]);
 
@@ -599,6 +654,75 @@ export default function CenterPane() {
     });
   }, [currentSession, allJudgmentsComplete, emit]);
 
+  const handleGenerateStoryImage = useCallback((storyLogId: number) => {
+    if (!currentSession || !isHost) return;
+    emit('generate_story_image', {
+      session_id: currentSession.id,
+      story_log_id: storyLogId,
+    });
+  }, [currentSession, emit, isHost]);
+
+  const openImageConceptModal = useCallback(async () => {
+    if (!currentSession || !currentUserId) return;
+
+    setShowImageConceptModal(true);
+    setIsImageConceptLoading(true);
+    try {
+      const data = await getSessionImageConcept(currentSession.id, currentUserId);
+      setImageConceptText(data.image_concept || '');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '이미지 컨셉을 불러오지 못했습니다.';
+      useGameStore.getState().addError(message);
+    } finally {
+      setIsImageConceptLoading(false);
+    }
+  }, [currentSession, currentUserId]);
+
+  const handleSaveImageConcept = useCallback(async () => {
+    if (!currentSession || !currentUserId) return;
+    const trimmed = imageConceptText.trim();
+    if (!trimmed) {
+      useGameStore.getState().addError('이미지 컨셉 내용을 입력하세요.');
+      return;
+    }
+
+    setIsImageConceptSaving(true);
+    try {
+      const data = await updateSessionImageConcept(currentSession.id, currentUserId, trimmed);
+      setImageConceptText(data.image_concept || '');
+      useGameStore.getState().addNotification({
+        type: 'system',
+        message: '이미지 컨셉이 저장되었습니다.',
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '이미지 컨셉 저장에 실패했습니다.';
+      useGameStore.getState().addError(message);
+    } finally {
+      setIsImageConceptSaving(false);
+    }
+  }, [currentSession, currentUserId, imageConceptText]);
+
+  const handleRegenerateImageConcept = useCallback(async () => {
+    if (!currentSession || !currentUserId) return;
+    const ok = window.confirm('스토리 시스템 프롬프트 기반으로 이미지 컨셉을 다시 생성할까요?');
+    if (!ok) return;
+
+    setIsImageConceptRegenerating(true);
+    try {
+      const data = await regenerateSessionImageConcept(currentSession.id, currentUserId);
+      setImageConceptText(data.image_concept || '');
+      useGameStore.getState().addNotification({
+        type: 'system',
+        message: '이미지 컨셉을 재생성했습니다.',
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '이미지 컨셉 재생성에 실패했습니다.';
+      useGameStore.getState().addError(message);
+    } finally {
+      setIsImageConceptRegenerating(false);
+    }
+  }, [currentSession, currentUserId]);
+
   const openSteeringModal = useCallback(() => {
     if (!currentSession) return;
     emit('get_story_instruction', { session_id: currentSession.id });
@@ -636,18 +760,21 @@ export default function CenterPane() {
   useEffect(() => {
     const openModeration = () => setShowModerationModal(true);
     const openSteering = () => openSteeringModal();
+    const openImageConcept = () => { void openImageConceptModal(); };
     const advanceStory = () => handleHostAdvanceStory();
 
     window.addEventListener('oc:open_moderation_modal', openModeration);
     window.addEventListener('oc:open_story_steering_modal', openSteering);
+    window.addEventListener('oc:open_image_concept_modal', openImageConcept);
     window.addEventListener('oc:host_advance_story', advanceStory);
 
     return () => {
       window.removeEventListener('oc:open_moderation_modal', openModeration);
       window.removeEventListener('oc:open_story_steering_modal', openSteering);
+      window.removeEventListener('oc:open_image_concept_modal', openImageConcept);
       window.removeEventListener('oc:host_advance_story', advanceStory);
     };
-  }, [openSteeringModal, handleHostAdvanceStory]);
+  }, [openSteeringModal, openImageConceptModal, handleHostAdvanceStory]);
 
   const handleSubmitAction = () => {
     // Validate action text is non-empty
@@ -760,6 +887,13 @@ export default function CenterPane() {
                     )}
                   </button>
 
+                  <button
+                    onClick={() => { void openImageConceptModal(); }}
+                    className="relative shrink-0 px-2.5 py-2.5 lg:px-3 lg:py-1.5 rounded-lg text-xs font-semibold shadow-sm transition-all border whitespace-nowrap bg-cyan-50 text-cyan-800 border-cyan-300 hover:bg-cyan-100"
+                  >
+                    이미지 컨셉
+                  </button>
+
                   {hostCanAdvanceStory && (
                     <button
                       onClick={handleHostAdvanceStory}
@@ -805,9 +939,6 @@ export default function CenterPane() {
 
       {/* Story Content Section */}
       <div className="flex-1 overflow-y-auto p-3 space-y-4 sm:p-6 sm:space-y-6 scroll-smooth bg-slate-50/50 relative">
-        {/* AI Generation Indicator - REMOVED for streaming optimization */}
-        {/* <AIGenerationIndicator isGenerating={isGenerating} /> */}
-        
         {currentSession ? (
           <>
             {displayEntries.length === 0 && !currentNarrative ? (
@@ -826,12 +957,17 @@ export default function CenterPane() {
               </div>
             ) : (
               displayEntries.map((entry) => {
+                const imageState = storyImages[entry.id];
+                const canGenerateImage = isHost && entry.role === 'AI';
                 return (
                   <StoryEntryItem
                     key={entry.id}
                     entry={entry}
                     currentCharacterId={currentCharacterId}
+                    canGenerateImage={canGenerateImage}
+                    imageState={imageState}
                     onOpenJudgmentModal={openJudgmentModal}
+                    onGenerateImage={handleGenerateStoryImage}
                   />
                 );
               })
@@ -1072,6 +1208,67 @@ export default function CenterPane() {
                   className="px-3 py-2 rounded-lg border border-violet-600 bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700"
                 >
                   저장
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Image Concept Modal */}
+      {showImageConceptModal && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <div className="w-full max-w-2xl bg-white rounded-xl border border-slate-200 shadow-xl p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-lg font-bold text-slate-800">이미지 컨셉 (호스트)</h3>
+              <button
+                onClick={() => setShowImageConceptModal(false)}
+                className="text-slate-400 hover:text-slate-600 text-xl leading-none"
+                aria-label="close"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-500 mb-2">
+              세션 전체 이미지 톤을 고정하는 컨셉입니다. 스토리 이미지 생성 시 매번 함께 사용됩니다.
+            </p>
+
+            {isImageConceptLoading ? (
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-6 text-sm text-slate-500">
+                이미지 컨셉을 불러오는 중...
+              </div>
+            ) : (
+              <textarea
+                value={imageConceptText}
+                onChange={(e) => setImageConceptText(e.target.value)}
+                rows={10}
+                placeholder="게임 시작 후 자동 생성됩니다. 필요하면 여기서 수정하세요."
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-100 focus:border-cyan-400"
+              />
+            )}
+
+            <div className="mt-4 flex items-center justify-between gap-2">
+              <button
+                onClick={handleRegenerateImageConcept}
+                disabled={isImageConceptLoading || isImageConceptSaving || isImageConceptRegenerating}
+                className="px-3 py-2 rounded-lg border border-cyan-300 bg-cyan-50 text-cyan-800 text-sm font-semibold hover:bg-cyan-100 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isImageConceptRegenerating ? '재생성 중...' : '자동 재생성'}
+              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowImageConceptModal(false)}
+                  className="px-3 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm font-medium hover:bg-slate-50"
+                >
+                  닫기
+                </button>
+                <button
+                  onClick={handleSaveImageConcept}
+                  disabled={isImageConceptLoading || isImageConceptRegenerating || isImageConceptSaving}
+                  className="px-3 py-2 rounded-lg border border-cyan-600 bg-cyan-600 text-white text-sm font-semibold hover:bg-cyan-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isImageConceptSaving ? '저장 중...' : '저장'}
                 </button>
               </div>
             </div>

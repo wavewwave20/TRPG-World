@@ -182,6 +182,11 @@ export interface SessionListItem {
   created_at: string;
 }
 
+export interface SessionImageConceptResponse {
+  session_id: number;
+  image_concept: string;
+}
+
 /**
  * Register request payload
  */
@@ -333,6 +338,66 @@ export async function getSessions(): Promise<SessionListItem[]> {
   });
 }
 
+export async function getSessionImageConcept(
+  sessionId: number,
+  userId: number
+): Promise<SessionImageConceptResponse> {
+  if (!sessionId || sessionId <= 0) {
+    throw new ApiError('Valid session ID is required', 400);
+  }
+  if (!userId || userId <= 0) {
+    throw new ApiError('Valid user ID is required', 400);
+  }
+
+  const url = `${API_BASE_URL}/api/sessions/${sessionId}/image-concept?user_id=${userId}`;
+  return fetchWithErrorHandling<SessionImageConceptResponse>(url, {
+    method: 'GET',
+  });
+}
+
+export async function updateSessionImageConcept(
+  sessionId: number,
+  userId: number,
+  imageConcept: string
+): Promise<SessionImageConceptResponse> {
+  if (!sessionId || sessionId <= 0) {
+    throw new ApiError('Valid session ID is required', 400);
+  }
+  if (!userId || userId <= 0) {
+    throw new ApiError('Valid user ID is required', 400);
+  }
+  if (!imageConcept || imageConcept.trim() === '') {
+    throw new ApiError('Image concept is required', 400);
+  }
+
+  const url = `${API_BASE_URL}/api/sessions/${sessionId}/image-concept`;
+  return fetchWithErrorHandling<SessionImageConceptResponse>(url, {
+    method: 'PUT',
+    body: JSON.stringify({
+      user_id: userId,
+      image_concept: imageConcept.trim(),
+    }),
+  });
+}
+
+export async function regenerateSessionImageConcept(
+  sessionId: number,
+  userId: number
+): Promise<SessionImageConceptResponse> {
+  if (!sessionId || sessionId <= 0) {
+    throw new ApiError('Valid session ID is required', 400);
+  }
+  if (!userId || userId <= 0) {
+    throw new ApiError('Valid user ID is required', 400);
+  }
+
+  const url = `${API_BASE_URL}/api/sessions/${sessionId}/image-concept/regenerate`;
+  return fetchWithErrorHandling<SessionImageConceptResponse>(url, {
+    method: 'POST',
+    body: JSON.stringify({ user_id: userId }),
+  });
+}
+
 /**
  * Register a new user
  * 
@@ -473,6 +538,7 @@ export interface ModelResponse {
   is_active: boolean;
   is_active_story: boolean;
   is_active_judgment: boolean;
+  is_active_image: boolean;
   has_api_key: boolean;
   created_at: string;
 }
@@ -483,12 +549,15 @@ export interface LLMSettingsResponse {
   active_model: ModelResponse | null;
   active_story_model: ModelResponse | null;
   active_judgment_model: ModelResponse | null;
+  active_image_model: ModelResponse | null;
   active_source: string;
   active_story_source: string;
   active_judgment_source: string;
+  active_image_source: string;
   env_model: string | null;
   env_story_model: string | null;
   env_judgment_model: string | null;
+  env_image_model: string | null;
 }
 
 export interface LLMTestResult {
@@ -553,7 +622,7 @@ export async function removeModel(
 export async function activateModel(
   userId: number,
   modelId: number,
-  purpose: 'story' | 'judgment' = 'story'
+  purpose: 'story' | 'judgment' | 'image' = 'story'
 ): Promise<ModelResponse> {
   const url = `${API_BASE_URL}/api/llm-settings/models/${modelId}/activate?user_id=${userId}&purpose=${purpose}`;
   return fetchWithErrorHandling<ModelResponse>(url, {
@@ -564,7 +633,7 @@ export async function activateModel(
 export async function deactivateModel(
   userId: number,
   modelId: number,
-  purpose: 'story' | 'judgment' = 'story'
+  purpose: 'story' | 'judgment' | 'image' = 'story'
 ): Promise<ModelResponse> {
   const url = `${API_BASE_URL}/api/llm-settings/models/${modelId}/deactivate?user_id=${userId}&purpose=${purpose}`;
   return fetchWithErrorHandling<ModelResponse>(url, {

@@ -1,9 +1,8 @@
 import type { Socket } from 'socket.io-client';
-import type { JudgmentResult } from '../../types/judgment';
 import { useGameStore } from '../gameStore';
 import { useActionStore } from '../actionStore';
-import { useStoryStore } from '../storyStore';
 import { useAIStore } from '../aiStore';
+import { useStoryImageStore } from '../storyImageStore';
 
 export function registerNarrativeHandlers(socket: Socket) {
   // AI generation started - show loading indicator
@@ -66,77 +65,7 @@ export function registerNarrativeHandlers(socket: Socket) {
     useGameStore.getState().addError(`게임 시작 실패: ${data.error}`);
   });
 
-  // --- LEGACY events (backward compatibility) ---
-
-  socket.on('story_generation_started', () => {
-    useAIStore.getState().setGenerating(true);
-    useAIStore.getState().clearCurrentNarrative();
-    useGameStore.getState().addNotification({
-      type: 'system',
-      message: 'AI가 스토리를 생성하고 있습니다...',
-    });
-  });
-
-  socket.on('story_generation_complete', (data: {
-    session_id: number;
-    narrative: string;
-    judgments: Array<{
-      character_id: number;
-      action_text: string;
-      dice_result: number;
-      modifier: number;
-      final_value: number;
-      difficulty: number;
-      difficulty_reasoning?: string;
-      outcome: string;
-    }>;
-  }) => {
-    useAIStore.getState().setGenerating(false);
-    if (data.narrative) {
-      useStoryStore.getState().addEntry({
-        id: Date.now(),
-        role: 'AI' as const,
-        content: data.narrative,
-        created_at: new Date().toISOString(),
-      });
-    }
-    useAIStore.getState().clearJudgments();
-    useActionStore.getState().setActionInputDisabled(false);
-    useGameStore.getState().addNotification({
-      type: 'system',
-      message: '스토리 생성이 완료되었습니다.',
-    });
-  });
-
-  socket.on('story_generation_error', (data: { session_id?: number; error: string }) => {
-    console.error('Story generation error:', data);
-    useAIStore.getState().setGenerating(false);
-    useActionStore.getState().setActionInputDisabled(false);
-    useGameStore.getState().addError(`스토리 생성 실패: ${data.error}`);
-    useGameStore.getState().addNotification({
-      type: 'error',
-      message: `스토리 생성 실패: ${data.error}`,
-      autoHide: true,
-    });
-  });
-
-  socket.on('ai_generation_complete', (data: {
-    story_log_id?: number;
-    narrative?: string;
-  }) => {
-    useAIStore.getState().setGenerating(false);
-    if (data.story_log_id) {
-      const completedJudgments = useAIStore.getState().judgments.filter(
-        (j): j is JudgmentResult => 'dice_result' in j
-      );
-      useAIStore.getState().saveJudgmentsToHistory(data.story_log_id, completedJudgments);
-    }
-    useGameStore.getState().addNotification({
-      type: 'system',
-      message: 'AI 생성이 완료되었습니다.',
-    });
-  });
-
+  // Commit/phase errors before narrative streaming starts.
   socket.on('ai_generation_error', (data: {
     error: string;
     phase?: 'judgment' | 'narrative';
@@ -149,5 +78,33 @@ export function registerNarrativeHandlers(socket: Socket) {
       message: `AI 생성 오류: ${data.error}`,
       autoHide: true,
     });
+  });
+
+  socket.on('story_image_generation_started', (data: { session_id: number; story_log_id: number }) => {
+    const currentSessionId = useGameStore.getState().currentSession?.id;
+    if (!currentSessionId || data.session_id !== currentSessionId) return;
+    useStoryImageStore.getState().startGeneration(data.story_log_id);
+  });
+
+  socket.on('story_image_generated', (data: {
+    session_id: number;
+    story_log_id: number;
+    image_url: string;
+    model_id?: string;
+  }) => {
+    const currentSessionId = useGameStore.getState().currentSession?.id;
+    if (!currentSessionId || data.session_id !== currentSessionId) return;
+    useStoryImageStore.getState().setGenerated(data.story_log_id, data.image_url, data.model_id);
+  });
+
+  socket.on('story_image_generation_error', (data: {
+    session_id: number;
+    story_log_id: number;
+    error: string;
+  }) => {
+    const currentSessionId = useGameStore.getState().currentSession?.id;
+    if (!currentSessionId || data.session_id !== currentSessionId) return;
+    useStoryImageStore.getState().setError(data.story_log_id, data.error);
+    useGameStore.getState().addError(`이미지 생성 실패: ${data.error}`);
   });
 }

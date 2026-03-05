@@ -238,14 +238,17 @@ export default function CharacterStatsPanel({ character }: CharacterStatsPanelPr
                 const modifier = typeof status.modifier === 'number' ? status.modifier : 0;
                 const modifierText = modifier === 0 ? '' : ` ${modifier > 0 ? '+' : ''}${modifier}`;
                 return (
-                  <span
+                  <div
                     key={`${status.name}-${index}`}
                     className={`px-2 py-1 rounded text-xs font-medium ${style}`}
                     role="listitem"
                     title={`${status.type}${status.description ? ` · ${status.description}` : ''}`}
                   >
-                    {status.name}{modifierText}
-                  </span>
+                    <div>{status.name}{modifierText}</div>
+                    {status.description && (
+                      <div className="text-[10px] opacity-80 mt-0.5">{status.description}</div>
+                    )}
+                  </div>
                 );
               })}
             </div>

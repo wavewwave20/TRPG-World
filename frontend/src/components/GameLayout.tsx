@@ -127,11 +127,7 @@ export default function GameLayout() {
   }, [socket, currentSession, clearChat, clearJudgments, setActionInputDisabled, setSession]);
 
   // Handle judgment modal open/close based on WebSocket events
-  // Task 13: WebSocket event handler updates
-  // Requirement 1.1: Open modal when judgment phase starts
-  // Requirement 1.5: Auto-close when story generation starts
-  // Requirement 8.1, 8.4, 8.5: Use existing WebSocket event handlers
-  // Requirement 9.1: Modal controls left pane state
+  // Open the judgment modal when the round enters the judgment phase.
   useEffect(() => {
     if (!socket || !currentSession) return;
 
@@ -147,22 +143,14 @@ export default function GameLayout() {
       setJudgmentModalOpen(true);
     };
 
-    // Close modal when story generation starts (Phase 3)
-    // This signals that all judgments are complete
-    const handleStoryGenerationStarted = () => {
-      setJudgmentModalOpen(false);
-    };
-
     // Register event handlers
     socket.on('judgment_ready', handleJudgmentReady);
     socket.on('player_action_analyzed', handlePlayerActionAnalyzed);
-    socket.on('story_generation_started', handleStoryGenerationStarted);
 
     // Cleanup on unmount
     return () => {
       socket.off('judgment_ready', handleJudgmentReady);
       socket.off('player_action_analyzed', handlePlayerActionAnalyzed);
-      socket.off('story_generation_started', handleStoryGenerationStarted);
     };
   }, [socket, currentSession, setJudgmentModalOpen]);
 
