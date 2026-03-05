@@ -48,7 +48,7 @@
 **현상:**
 - `generate_narrative_streaming` (#3)이 메인 경로에서 항상 사용됨
 - `generate_narrative` (#2)는 `ai_gm_service_v2.py:225`의 `generate_narrative()` 메서드에서만 호출
-- 이 메서드는 `_trigger_story_generation_internal` (레거시 폴백)에서만 호출됨
+- 이 메서드는 `request_narrative_stream`의 내부 폴백 헬퍼 `_trigger_story_generation_internal`에서만 호출됨
 
 **영향:**
 - 레거시 폴백이 실행되면 **동일한 프롬프트로 비스트리밍 LLM 콜**이 발생
@@ -67,7 +67,7 @@
 - 메인 경로에서는 내러티브 AI가 `<summary>` XML 안에 `<act_transition>true/false</act_transition>`을 직접 출력
 - `_handle_act_transition_from_metadata()` → `execute_act_transition()`으로 처리
 - `analyze_act_transition` (#4)은 `check_act_transition()`에서만 호출되는데, 이는 `_check_act_transition_after_narrative` (레거시 폴백)에서만 호출됨
-- 레거시 폴백은 `_trigger_story_generation_internal`에서 메타데이터가 없을 때만 실행
+- 레거시 폴백 로직은 `_trigger_story_generation_internal` 내부에서 메타데이터가 없을 때만 실행
 
 **영향:**
 - 정상 경로에서는 **절대 호출되지 않는** LLM 콜
