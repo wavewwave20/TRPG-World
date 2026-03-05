@@ -96,6 +96,8 @@ export interface CreateSessionRequest {
   title: string;
   world_prompt: string;
   system_prompt?: string;
+  max_acts?: number | null;
+  act_min_narrative_turns?: number | null;
 }
 
 /**
@@ -239,6 +241,12 @@ export async function createSession(
   const systemPrompt = (sessionData.system_prompt ?? sessionData.world_prompt ?? '').trim();
   if (!systemPrompt) {
     throw new ApiError('System prompt is required', 400);
+  }
+  if (sessionData.max_acts != null && sessionData.max_acts < 2) {
+    throw new ApiError('max_acts must be >= 2 or null', 400);
+  }
+  if (sessionData.act_min_narrative_turns != null && sessionData.act_min_narrative_turns < 3) {
+    throw new ApiError('act_min_narrative_turns must be >= 3 or null', 400);
   }
 
   const url = `${API_BASE_URL}/api/sessions/`;

@@ -6,6 +6,12 @@ import { useAuthStore } from '../stores/authStore';
 import { useChatStore } from '../stores/chatStore';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+const DEFAULT_MAX_ACTS = 4;
+const DEFAULT_MIN_NARRATIVE_TURNS = 5;
+const ACTS_SLIDER_MIN = 2;
+const ACTS_SLIDER_MAX = 12;
+const TURNS_SLIDER_MIN = 3;
+const TURNS_SLIDER_MAX = 12;
 
 interface SessionCreationFormProps {
   onSuccess?: () => void;
@@ -14,6 +20,10 @@ interface SessionCreationFormProps {
 export default function SessionCreationForm({ onSuccess }: SessionCreationFormProps) {
   const [title, setTitle] = useState('');
   const [worldPrompt, setWorldPrompt] = useState('');
+  const [maxActs, setMaxActs] = useState(DEFAULT_MAX_ACTS);
+  const [isMaxActsUnlimited, setIsMaxActsUnlimited] = useState(false);
+  const [minNarrativeTurns, setMinNarrativeTurns] = useState(DEFAULT_MIN_NARRATIVE_TURNS);
+  const [isTurnsUnlimited, setIsTurnsUnlimited] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -43,6 +53,14 @@ export default function SessionCreationForm({ onSuccess }: SessionCreationFormPr
       setError('World prompt is required');
       return;
     }
+    if (!isMaxActsUnlimited && maxActs < ACTS_SLIDER_MIN) {
+      setError(`Act count must be at least ${ACTS_SLIDER_MIN}`);
+      return;
+    }
+    if (!isTurnsUnlimited && minNarrativeTurns < TURNS_SLIDER_MIN) {
+      setError(`Narrative turns must be at least ${TURNS_SLIDER_MIN}`);
+      return;
+    }
 
     if (!userId) {
       setError('User not authenticated');
@@ -65,7 +83,9 @@ export default function SessionCreationForm({ onSuccess }: SessionCreationFormPr
       const response = await createSession({
         host_user_id: userId,
         title: title.trim(),
-        world_prompt: worldPrompt.trim()
+        world_prompt: worldPrompt.trim(),
+        max_acts: isMaxActsUnlimited ? null : maxActs,
+        act_min_narrative_turns: isTurnsUnlimited ? null : minNarrativeTurns,
       });
       
       // Update game store with created session
@@ -100,6 +120,10 @@ export default function SessionCreationForm({ onSuccess }: SessionCreationFormPr
       // Clear form
       setTitle('');
       setWorldPrompt('');
+      setMaxActs(DEFAULT_MAX_ACTS);
+      setIsMaxActsUnlimited(false);
+      setMinNarrativeTurns(DEFAULT_MIN_NARRATIVE_TURNS);
+      setIsTurnsUnlimited(false);
       
       // Call success callback if provided
       if (onSuccess) {
@@ -164,6 +188,76 @@ export default function SessionCreationForm({ onSuccess }: SessionCreationFormPr
           <p className="text-xs text-slate-500 text-right">
             AI 게임 마스터가 이 정보를 바탕으로 이야기를 생성합니다.
           </p>
+        </div>
+
+        <div className="space-y-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label htmlFor="max-acts" className="block text-sm font-semibold text-slate-700">
+                총 액트 수 (최대)
+              </label>
+              <span className="text-xs font-semibold text-slate-600">
+                {isMaxActsUnlimited ? '무제한' : `${maxActs}막`}
+              </span>
+            </div>
+            <input
+              id="max-acts"
+              type="range"
+              min={ACTS_SLIDER_MIN}
+              max={ACTS_SLIDER_MAX}
+              value={maxActs}
+              onChange={(e) => setMaxActs(parseInt(e.target.value, 10))}
+              disabled={isSubmitting || isMaxActsUnlimited}
+              className="w-full accent-blue-600 disabled:opacity-50"
+            />
+            <label className="inline-flex items-center gap-2 text-xs text-slate-600">
+              <input
+                type="checkbox"
+                checked={isMaxActsUnlimited}
+                onChange={(e) => setIsMaxActsUnlimited(e.target.checked)}
+                disabled={isSubmitting}
+                className="accent-blue-600"
+              />
+              무제한 (엔딩 없음 모드)
+            </label>
+            <p className="text-[11px] text-slate-500">
+              기본 4막, 최소 2막. 마지막 막에 도달하면 결말로 향합니다.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label htmlFor="min-turns" className="block text-sm font-semibold text-slate-700">
+                액트당 최소 AI 서술 턴
+              </label>
+              <span className="text-xs font-semibold text-slate-600">
+                {isTurnsUnlimited ? '무제한' : `${minNarrativeTurns}턴`}
+              </span>
+            </div>
+            <input
+              id="min-turns"
+              type="range"
+              min={TURNS_SLIDER_MIN}
+              max={TURNS_SLIDER_MAX}
+              value={minNarrativeTurns}
+              onChange={(e) => setMinNarrativeTurns(parseInt(e.target.value, 10))}
+              disabled={isSubmitting || isTurnsUnlimited}
+              className="w-full accent-blue-600 disabled:opacity-50"
+            />
+            <label className="inline-flex items-center gap-2 text-xs text-slate-600">
+              <input
+                type="checkbox"
+                checked={isTurnsUnlimited}
+                onChange={(e) => setIsTurnsUnlimited(e.target.checked)}
+                disabled={isSubmitting}
+                className="accent-blue-600"
+              />
+              무제한 (기존 AI 판단)
+            </label>
+            <p className="text-[11px] text-slate-500">
+              기본 5턴, 최소 3턴. 최소 턴을 넘기면 1~2턴 내 자연스럽게 막을 마무리합니다.
+            </p>
+          </div>
         </div>
         
         {/* Messages */}

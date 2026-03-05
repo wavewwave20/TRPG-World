@@ -6,13 +6,13 @@ import { useAuthStore } from './stores/authStore';
 import { useActionStore } from './stores/actionStore';
 import { useActStore } from './stores/actStore';
 import GameLayout from './components/GameLayout';
-import SessionCreationForm from './components/SessionCreationForm';
 import SessionList from './components/SessionList';
 import HostSessionsManager from './components/HostSessionsManager';
 import LoginForm from './components/LoginForm';
 import CharacterManagement from './components/CharacterManagement';
 import SessionInfoDropdown from './components/SessionInfoDropdown';
 import LLMSettingsPage from './components/LLMSettingsPage';
+import SessionCreationPage from './components/SessionCreationPage';
 import type { Character as BaseCharacter } from './types/character';
 import './App.css'
 
@@ -22,6 +22,21 @@ interface Character extends BaseCharacter {
   user_id: number;
   created_at: string;
 }
+
+interface StoryInstructionControls {
+  end_crisis?: boolean;
+  focus_main_goal?: boolean;
+  limit_consecutive_crisis?: boolean;
+  pace?: 'up' | 'down' | string;
+}
+
+interface StoryInstructionPayload {
+  session_id: number;
+  instruction?: string;
+  controls?: StoryInstructionControls;
+}
+
+type LobbyView = 'overview' | 'create-session';
 
 function MobileGrowthHistoryMenu({ onClose }: { onClose: () => void }) {
   const [expanded, setExpanded] = useState(false);
@@ -76,6 +91,7 @@ function App() {
 
   const [selectedCharacter, setSelectedCharacter] = useState<Character | null>(null);
   const [showLLMSettings, setShowLLMSettings] = useState(false);
+  const [lobbyView, setLobbyView] = useState<LobbyView>('overview');
   const [showMobileHeaderMenu, setShowMobileHeaderMenu] = useState(false);
   const [isSteeringEnabled, setIsSteeringEnabled] = useState(false);
   const showLobby = !currentSession;
@@ -83,9 +99,9 @@ function App() {
   // Track steering enabled state from socket events
   useEffect(() => {
     if (!socket || !currentSession) { setIsSteeringEnabled(false); return; }
-    const checkEnabled = (data: { session_id: number; instruction?: string; controls?: any }) => {
+    const checkEnabled = (data: StoryInstructionPayload) => {
       if (data.session_id !== currentSession.id) return;
-      const c = data.controls || {};
+      const c = data.controls ?? {};
       setIsSteeringEnabled(
         !!(data.instruction || '').trim() || !!c.end_crisis || !!c.focus_main_goal || !!c.limit_consecutive_crisis || (c.pace === 'up' || c.pace === 'down')
       );
@@ -125,6 +141,7 @@ function App() {
       clearChat();
       clearNotifications();
       setSession(null);
+      setLobbyView('overview');
     }
   };
 
@@ -132,6 +149,16 @@ function App() {
     // Clear character selection and go back to character management
     setSelectedCharacter(null);
     setCharacter(null);
+    setLobbyView('overview');
+  };
+
+  const handleLobbyBack = () => {
+    if (lobbyView === 'create-session') {
+      setLobbyView('overview');
+      return;
+    }
+
+    handleBackToCharacterSelect();
   };
 
   const handleEndSession = async () => {
@@ -145,6 +172,7 @@ function App() {
     clearChat();
     clearNotifications();
     setSession(null);
+    setLobbyView('overview');
   };
 
   const isHost = currentSession?.hostUserId === userId;
@@ -186,9 +214,9 @@ function App() {
               </button>
             ) : (
               <button
-                onClick={handleBackToCharacterSelect}
+                onClick={handleLobbyBack}
                 className="group flex items-center justify-center w-10 h-10 lg:w-8 lg:h-8 rounded-full hover:bg-slate-100 text-slate-500 hover:text-blue-600 transition-all border border-transparent hover:border-slate-200"
-                title="캐릭터 선택으로 돌아가기"
+                title={lobbyView === 'create-session' ? '로비로 돌아가기' : '캐릭터 선택으로 돌아가기'}
               >
                 <span className="text-lg group-hover:-translate-x-0.5 transition-transform">←</span>
               </button>
@@ -291,7 +319,7 @@ function App() {
             )}
 
             {/* Admin LLM Settings Button */}
-            {isAdmin && showLobby && (
+            {isAdmin && showLobby && lobbyView === 'overview' && (
               <button
                 onClick={() => setShowLLMSettings(true)}
                 className="flex items-center justify-center w-10 h-10 lg:w-8 lg:h-8 rounded-full hover:bg-slate-100 text-slate-500 hover:text-blue-600 transition-all border border-transparent hover:border-slate-200"
@@ -343,6 +371,9 @@ function App() {
             <LLMSettingsPage onBack={() => setShowLLMSettings(false)} />
           </div>
         ) : showLobby ? (
+          lobbyView === 'create-session' ? (
+            <SessionCreationPage onBack={() => setLobbyView('overview')} />
+          ) : (
           <div className="h-full w-full overflow-y-auto py-6">
             <div className="flex flex-col items-center justify-center w-[95%] max-w-7xl mx-auto min-h-full">
               <div className="w-full text-center mb-8 sm:mb-12">
@@ -357,7 +388,26 @@ function App() {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6 sm:gap-8 w-full max-w-6xl cursor-default pb-12">
                 {/* Session Creation */}
                 <div className="h-full">
-                  <SessionCreationForm />
+                  <div className="bg-white border border-slate-200 rounded-xl p-8 shadow-card hover:shadow-card-hover transition-all duration-300 h-full flex flex-col">
+                    <div className="mb-6 pb-4 border-b border-slate-100">
+                      <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                        <span className="text-2xl">✨</span> 새 세션
+                      </h3>
+                      <p className="text-slate-500 text-sm mt-1">
+                        새로운 모험을 시작할 준비가 되었다면 생성 페이지로 이동하세요.
+                      </p>
+                    </div>
+
+                    <div className="mt-auto">
+                      <button
+                        type="button"
+                        onClick={() => setLobbyView('create-session')}
+                        className="w-full bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white px-6 py-3 rounded-lg text-base font-semibold shadow-sm transition-all duration-200"
+                      >
+                        새 세션 만들기
+                      </button>
+                    </div>
+                  </div>
                 </div>
                 
                 {/* Session List */}
@@ -372,6 +422,7 @@ function App() {
               </div>
             </div>
           </div>
+          )
         ) : (
           <div className="h-full w-full flex items-center justify-center p-0 lg:p-6">
             <div className="w-full lg:w-[95%] lg:max-w-7xl h-full lg:border lg:border-slate-200 bg-white lg:rounded-xl lg:shadow-sm overflow-hidden">
