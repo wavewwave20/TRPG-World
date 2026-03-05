@@ -5,12 +5,12 @@ from pathlib import Path
 
 import litellm
 import socketio
-from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from litellm.integrations.custom_logger import CustomLogger
 
+from alembic import command
 from app.config import ConfigurationError, validate_ai_gm_config
 from app.routes import auth, characters, llm_settings, sessions, story_logs
 from app.socket_server import sio
@@ -134,10 +134,12 @@ async def on_startup():
 
         story_config = resolve_llm_config(purpose="story")
         judgment_config = resolve_llm_config(purpose="judgment")
+        image_config = resolve_llm_config(purpose="image")
         logger.info(
             "LLM config resolved: "
             f"story={story_config.model_id}({story_config.source}), "
-            f"judgment={judgment_config.model_id}({judgment_config.source})"
+            f"judgment={judgment_config.model_id}({judgment_config.source}), "
+            f"image={image_config.model_id}({image_config.source})"
         )
     except Exception as e:
         logger.warning(f"Failed to resolve LLM config from DB: {e}")

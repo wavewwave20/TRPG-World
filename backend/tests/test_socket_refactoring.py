@@ -565,16 +565,6 @@ class TestEventHandlerRegistration:
 
         assert "commit_actions" in sio.handlers.get("/", {})
 
-    def test_submit_player_action_handler_registered(self):
-        """submit_player_action 이벤트 핸들러가 등록되어 있는지 확인합니다.
-
-        Feature: socket-server-refactoring, Property 3: 이벤트 핸들러 등록
-        검증 대상: 요구사항 12.3
-        """
-        from app.socket import sio
-
-        assert "submit_player_action" in sio.handlers.get("/", {})
-
     def test_roll_dice_handler_registered(self):
         """roll_dice 이벤트 핸들러가 등록되어 있는지 확인합니다.
 
@@ -615,11 +605,9 @@ class TestEventHandlerRegistration:
             "reorder_actions",
             "delete_action",
             "commit_actions",
-            "submit_player_action",
             "roll_dice",
             "next_judgment",
             "request_narrative_stream",
-            "trigger_story_generation",
             "session_heartbeat",
         ]
 

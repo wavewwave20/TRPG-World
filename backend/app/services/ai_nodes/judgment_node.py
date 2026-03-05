@@ -304,7 +304,9 @@ async def _determine_difficulty_with_ai(
             status_type = str(status.get("type") or "debuff")
             modifier = status.get("modifier", 0)
             modifier_text = f"{modifier:+d}" if isinstance(modifier, int) and modifier != 0 else "0"
-            status_texts.append(f"{status_name}({status_type}, mod {modifier_text})")
+            status_description = str(status.get("description") or "").strip()
+            description_text = f", desc: {status_description}" if status_description else ""
+            status_texts.append(f"{status_name}({status_type}, mod {modifier_text}{description_text})")
         statuses_line = ", ".join(status_texts) if status_texts else "없음"
 
         inventory_texts = []
@@ -314,10 +316,22 @@ async def _determine_difficulty_with_ai(
             item_name = str(item.get("name") or "").strip()
             if not item_name:
                 continue
-            quantity = item.get("quantity", 1)
+            quantity_raw = item.get("quantity", 1)
+            try:
+                quantity = max(1, int(quantity_raw))
+            except (TypeError, ValueError):
+                quantity = 1
+            item_type = str(item.get("type") or "equipment").strip().lower()
+            type_text = "소모품" if item_type == "consumable" else "장비"
             equipped = bool(item.get("equipped", False))
             equipped_text = "장착" if equipped else "비장착"
-            inventory_texts.append(f"{item_name} x{quantity} ({equipped_text})")
+            modifier = item.get("modifier")
+            modifier_text = f", mod {modifier:+d}" if isinstance(modifier, int) and modifier != 0 else ""
+            item_description = str(item.get("description") or "").strip()
+            description_text = f", desc: {item_description}" if item_description else ""
+            inventory_texts.append(
+                f"{item_name} x{quantity} ({type_text}, {equipped_text}{modifier_text}{description_text})"
+            )
         inventory_line = ", ".join(inventory_texts) if inventory_texts else "없음"
 
         char_info = (

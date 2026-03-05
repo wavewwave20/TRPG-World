@@ -18,8 +18,10 @@ from app.models import (
     StoryAct,
     StoryLog,
 )
+from app.services.image_generation_service import StoryImageGenerationError, generate_story_image_for_log
 from app.services.llm_config_resolver import get_active_llm_model, get_active_llm_models
 from app.services.session_activity_logger import log_session_activity
+from app.services.session_image_concept_service import generate_image_concept_from_world_prompt
 from app.services.story_director import get_story_director_service
 from app.socket.managers.presence_manager import session_presence
 from app.socket.server import logger
@@ -692,191 +694,6 @@ def register_handlers(sio):
             db.close()
 
     @sio.event
-    async def submit_player_action(sid, data):
-        """플레이어 행동 제출을 처리합니다 (Phase 1).
-
-        행동을 분석하고 DC를 결정합니다:
-        1. 플레이어 행동 수신
-        2. AI로 행동 분석 및 DC 결정
-        3. 캐릭터 스탯에서 보정치 계산
-        4. judgment_ready 이벤트로 보정치 + DC 반환
-
-        인자:
-            sid: 소켓 세션 ID
-            data: 행동 데이터
-                - session_id: 게임 세션 ID
-                - character_id: 캐릭터 ID
-                - action_text: 행동 텍스트
-                - action_type: 행동 유형 (strength, dexterity 등)
-        """
-        try:
-            session_id = data.get("session_id")
-            character_id = data.get("character_id")
-            action_text = data.get("action_text", "").strip()
-            action_type = data.get("action_type", "dexterity").lower()
-
-            logger.info(f"Phase 1 - 행동 제출: 세션={session_id}, 캐릭터={character_id}")
-
-            # 필수 필드 검증
-            if not session_id or not character_id:
-                await sio.emit(
-                    "action_analysis_error",
-                    {"session_id": session_id, "error": "session_id와 character_id가 필요합니다"},
-                    to=sid,
-                )
-                return
-
-            if not action_text:
-                await sio.emit(
-                    "action_analysis_error",
-                    {"session_id": session_id, "error": "행동 텍스트가 비어있습니다"},
-                    to=sid,
-                )
-                return
-
-            db = SessionLocal()
-            try:
-                # 세션 존재 및 활성 상태 확인
-                session = db.query(GameSession).filter(GameSession.id == session_id).first()
-                if not session:
-                    await sio.emit(
-                        "action_analysis_error",
-                        {"session_id": session_id, "error": "세션을 찾을 수 없습니다"},
-                        to=sid,
-                    )
-                    return
-
-                if not session.is_active:
-                    await sio.emit(
-                        "action_analysis_error",
-                        {"session_id": session_id, "error": "세션이 활성 상태가 아닙니다"},
-                        to=sid,
-                    )
-                    return
-
-                # 캐릭터 존재 확인
-                character = db.query(Character).filter(Character.id == character_id).first()
-                if not character:
-                    await sio.emit(
-                        "action_analysis_error",
-                        {"session_id": session_id, "error": "캐릭터를 찾을 수 없습니다"},
-                        to=sid,
-                    )
-                    return
-
-                # AI 서비스 import
-                from app.schemas import ActionType, PlayerAction
-                from app.services.ai_gm_service_v2 import AIGMServiceV2
-
-                # action_type 문자열을 ActionType enum으로 변환
-                action_type_map = {
-                    "strength": ActionType.STRENGTH,
-                    "dexterity": ActionType.DEXTERITY,
-                    "constitution": ActionType.CONSTITUTION,
-                    "intelligence": ActionType.INTELLIGENCE,
-                    "wisdom": ActionType.WISDOM,
-                    "charisma": ActionType.CHARISMA,
-                }
-                action_type_enum = action_type_map.get(action_type, ActionType.DEXTERITY)
-
-                # PlayerAction 생성
-                player_action = PlayerAction(
-                    character_id=character_id,
-                    action_text=action_text,
-                    action_type=action_type_enum,
-                )
-
-                # AI GM 서비스 초기화
-                model_config = get_active_llm_models()
-                ai_service = AIGMServiceV2(
-                    db=db,
-                    llm_model=model_config["story"],
-                    judgment_model=model_config["judgment"],
-                )
-
-                # Phase 1: 행동 분석
-                analyses = await ai_service.analyze_actions(session_id=session_id, player_actions=[player_action])
-
-                if not analyses:
-                    raise ValueError("분석 결과가 반환되지 않았습니다")
-
-                analysis = analyses[0]
-
-                # Phase 1 결과를 데이터베이스에 저장
-                action_judgment = ActionJudgment(
-                    session_id=session_id,
-                    character_id=character_id,
-                    action_text=action_text,
-                    action_type=action_type,
-                    modifier=analysis.modifier,
-                    difficulty=analysis.difficulty,
-                    difficulty_reasoning=analysis.difficulty_reasoning,
-                    phase=1,  # Phase 1: 분석 완료
-                )
-                db.add(action_judgment)
-                db.commit()
-                db.refresh(action_judgment)
-
-                logger.info(
-                    f"Phase 1 완료: 캐릭터={character_id}, 보정치={analysis.modifier:+d}, DC={analysis.difficulty}"
-                )
-
-                # 플레이어에게 judgment_ready 이벤트 전송
-                await sio.emit(
-                    "judgment_ready",
-                    {
-                        "session_id": session_id,
-                        "character_id": character_id,
-                        "judgment_id": action_judgment.id,
-                        "action_text": action_text,
-                        "action_type": analysis.action_type.value,
-                        "modifier": analysis.modifier,
-                        "difficulty": analysis.difficulty,
-                        "difficulty_reasoning": analysis.difficulty_reasoning,
-                        "requires_roll": _coerce_requires_roll(analysis.requires_roll),
-                    },
-                    to=sid,
-                )
-
-                # 다른 플레이어들에게 브로드캐스트
-                room_name = f"session_{session_id}"
-                await sio.emit(
-                    "player_action_analyzed",
-                    {
-                        "session_id": session_id,
-                        "character_id": character_id,
-                        "character_name": character.name,
-                        "judgment_id": action_judgment.id,
-                        "action_text": action_text,
-                        "action_type": analysis.action_type.value,
-                        "modifier": analysis.modifier,
-                        "difficulty": analysis.difficulty,
-                        "difficulty_reasoning": analysis.difficulty_reasoning,
-                        "requires_roll": _coerce_requires_roll(analysis.requires_roll),
-                    },
-                    room=room_name,
-                    skip_sid=sid,
-                )
-
-            except Exception as e:
-                logger.error(f"Phase 1 에러: {e}", exc_info=True)
-                await sio.emit(
-                    "action_analysis_error",
-                    {"session_id": session_id, "character_id": character_id, "error": str(e)},
-                    to=sid,
-                )
-            finally:
-                db.close()
-
-        except Exception as e:
-            logger.error(f"submit_player_action 에러: {e}", exc_info=True)
-            await sio.emit(
-                "action_analysis_error",
-                {"session_id": data.get("session_id"), "error": "행동 분석 실패"},
-                to=sid,
-            )
-
-    @sio.event
     async def roll_dice(sid, data):
         """주사위 굴림 확인을 처리합니다 (Phase 2).
 
@@ -1239,6 +1056,11 @@ def register_handlers(sio):
                     )
                     return
 
+                if not (session.image_concept or "").strip():
+                    session.image_concept = await generate_image_concept_from_world_prompt(session.world_prompt or "")
+                    db.commit()
+                    logger.info(f"세션 이미지 컨셉 자동 생성 완료: session={session_id}")
+
                 room_name = f"session_{session_id}"
 
                 # 시작 상황 추출
@@ -1401,6 +1223,112 @@ def register_handlers(sio):
                     "enabled": bool(state.host_instruction),
                     "controls": normalized_controls,
                 },
+                room=f"session_{session_id}",
+            )
+        finally:
+            db.close()
+
+    @sio.event
+    async def generate_story_image(sid, data):
+        """호스트 요청으로 스토리 이미지 1장을 생성합니다."""
+        session_id = data.get("session_id")
+        story_log_id_raw = data.get("story_log_id")
+
+        if not session_id:
+            await sio.emit(
+                "story_image_generation_error",
+                {"session_id": session_id, "story_log_id": story_log_id_raw, "error": "session_id가 필요합니다"},
+                to=sid,
+            )
+            return
+
+        try:
+            story_log_id = int(story_log_id_raw)
+        except (TypeError, ValueError):
+            await sio.emit(
+                "story_image_generation_error",
+                {"session_id": session_id, "story_log_id": story_log_id_raw, "error": "story_log_id가 올바르지 않습니다"},
+                to=sid,
+            )
+            return
+
+        presence = session_presence.get(sid)
+        if not presence or presence.get("session_id") != session_id:
+            await sio.emit(
+                "story_image_generation_error",
+                {"session_id": session_id, "story_log_id": story_log_id, "error": "세션 참가 상태가 아닙니다"},
+                to=sid,
+            )
+            return
+
+        db = SessionLocal()
+        try:
+            session = db.query(GameSession).filter(GameSession.id == session_id).first()
+            if not session:
+                await sio.emit(
+                    "story_image_generation_error",
+                    {"session_id": session_id, "story_log_id": story_log_id, "error": "세션을 찾을 수 없습니다"},
+                    to=sid,
+                )
+                return
+
+            if presence.get("user_id") != session.host_user_id:
+                await sio.emit(
+                    "story_image_generation_error",
+                    {"session_id": session_id, "story_log_id": story_log_id, "error": "호스트만 이미지를 생성할 수 있습니다"},
+                    to=sid,
+                )
+                return
+
+            room_name = f"session_{session_id}"
+            await sio.emit(
+                "story_image_generation_started",
+                {"session_id": session_id, "story_log_id": story_log_id},
+                room=room_name,
+            )
+
+            result = await generate_story_image_for_log(
+                db=db,
+                session_id=session_id,
+                story_log_id=story_log_id,
+            )
+
+            await sio.emit(
+                "story_image_generated",
+                {
+                    "session_id": session_id,
+                    "story_log_id": story_log_id,
+                    "image_url": result["image_url"],
+                    "model_id": result["model_id"],
+                },
+                room=room_name,
+            )
+            log_session_activity(
+                db,
+                session_id=session_id,
+                actor_user_id=presence.get("user_id"),
+                source="socket",
+                action_type="story.image.generate",
+                status="success",
+                message="스토리 이미지 생성 완료",
+                detail={
+                    "story_log_id": story_log_id,
+                    "model_id": result["model_id"],
+                },
+            )
+            db.commit()
+        except StoryImageGenerationError as e:
+            logger.warning(f"스토리 이미지 생성 실패: session={session_id}, story_log={story_log_id}, error={e}")
+            await sio.emit(
+                "story_image_generation_error",
+                {"session_id": session_id, "story_log_id": story_log_id, "error": str(e)},
+                room=f"session_{session_id}",
+            )
+        except Exception as e:
+            logger.error(f"스토리 이미지 생성 처리 실패: {e}", exc_info=True)
+            await sio.emit(
+                "story_image_generation_error",
+                {"session_id": session_id, "story_log_id": story_log_id, "error": "이미지 생성 중 오류가 발생했습니다"},
                 room=f"session_{session_id}",
             )
         finally:
@@ -1662,38 +1590,6 @@ def register_handlers(sio):
                 _narrative_stream_in_progress.discard(session_id)
             await sio.emit("error", {"message": "이야기 스트리밍 실패"}, room=sid)
 
-    @sio.event
-    async def trigger_story_generation(sid, data):
-        """이야기 생성을 수동으로 트리거합니다.
-
-        마지막 플레이어가 주사위 굴림을 완료하고 "이야기 진행" 버튼을 클릭했을 때 호출됩니다.
-
-        인자:
-            sid: 소켓 세션 ID
-            data: 요청 데이터
-                - session_id: 게임 세션 ID
-        """
-        try:
-            session_id = data.get("session_id")
-
-            if not session_id:
-                await sio.emit("error", {"message": "session_id가 필요합니다"}, room=sid)
-                return
-
-            logger.info(f"수동 이야기 생성 트리거: 세션={session_id}")
-
-            db = SessionLocal()
-            try:
-                room_name = f"session_{session_id}"
-                await _trigger_story_generation_internal(session_id, db, room_name, sio)
-            finally:
-                db.close()
-
-        except Exception as e:
-            logger.error(f"trigger_story_generation 에러: {e}", exc_info=True)
-            await sio.emit("error", {"message": "이야기 생성 트리거 실패"}, room=sid)
-
-
 async def _trigger_story_generation_internal(session_id: int, db, room_name: str, sio):
     """이야기 생성을 내부적으로 트리거합니다 (Phase 3).
 
@@ -1712,8 +1608,8 @@ async def _trigger_story_generation_internal(session_id: int, db, room_name: str
     """
     logger.info(f"Phase 3 - 이야기 생성 시작: 세션={session_id}")
 
-    # story_generation_started 이벤트 브로드캐스트
-    await sio.emit("story_generation_started", {"session_id": session_id}, room=room_name)
+    # 표준 스트리밍 시작 이벤트 브로드캐스트
+    await sio.emit("narrative_stream_started", {"session_id": session_id}, room=room_name)
 
     try:
         # 모든 Phase 2 판정 조회 (주사위 굴림 완료, 아직 이야기 생성 안 됨)
@@ -1799,31 +1695,8 @@ async def _trigger_story_generation_internal(session_id: int, db, room_name: str
                 j.story_log_id = latest_ai_story_log_id
         db.commit()
 
-        # 판정을 직렬화 가능한 형식으로 변환
-        judgments_data = [
-            {
-                "character_id": j.character_id,
-                "action_text": j.action_text,
-                "dice_result": j.dice_result,
-                "modifier": j.modifier,
-                "final_value": j.final_value,
-                "difficulty": j.difficulty,
-                "difficulty_reasoning": j.difficulty_reasoning,
-                "outcome": j.outcome,
-            }
-            for j in result.judgments
-        ]
-
-        # story_generation_complete 이벤트 브로드캐스트
-        await sio.emit(
-            "story_generation_complete",
-            {
-                "session_id": session_id,
-                "narrative": result.full_narrative,
-                "judgments": judgments_data,
-            },
-            room=room_name,
-        )
+        # 표준 스트리밍 완료 이벤트 브로드캐스트
+        await sio.emit("narrative_complete", {"session_id": session_id}, room=room_name)
 
         participants = db.query(SessionParticipant).filter(SessionParticipant.session_id == session_id).all()
         refreshed_character_ids = sorted({p.character_id for p in participants})
@@ -1876,15 +1749,7 @@ async def _trigger_story_generation_internal(session_id: int, db, room_name: str
                     break
 
             if host_sid:
-                await sio.emit(
-                    "story_generation_error",
-                    {"session_id": session_id, "error": str(e)},
-                    to=host_sid,
-                )
+                await sio.emit("narrative_error", {"session_id": session_id, "error": str(e)}, to=host_sid)
             else:
                 # 폴백: 룸에 브로드캐스트
-                await sio.emit(
-                    "story_generation_error",
-                    {"session_id": session_id, "error": str(e)},
-                    room=room_name,
-                )
+                await sio.emit("narrative_error", {"session_id": session_id, "error": str(e)}, room=room_name)

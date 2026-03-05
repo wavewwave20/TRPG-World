@@ -1298,26 +1298,27 @@ class AIGMServiceV2:
                 for raw_status in add_statuses:
                     if not isinstance(raw_status, dict):
                         continue
-                    status_name = str(raw_status.get("name") or "").strip()
+
+                    parsed_statuses = normalize_statuses(
+                        {"statuses": [raw_status], "inventory": []},
+                        include_legacy_status_effects=False,
+                    )
+                    if not parsed_statuses:
+                        continue
+
+                    normalized_status = dict(parsed_statuses[0])
+                    status_name = str(normalized_status.get("name") or "").strip()
                     if not status_name:
                         continue
-                    status_type = str(raw_status.get("type") or "debuff").strip().lower()
-                    if status_type not in {"buff", "debuff"}:
-                        status_type = "debuff"
-                    modifier_raw = raw_status.get("modifier", 0)
-                    modifier = modifier_raw if isinstance(modifier_raw, int) else 0
+                    status_type = str(normalized_status.get("type") or "debuff").strip().lower()
                     key = (status_name.lower(), status_type)
                     if key in existing_keys:
                         continue
-                    statuses.append(
-                        {
-                            "name": status_name,
-                            "category": str(raw_status.get("category") or "physical").strip().lower(),
-                            "type": status_type,
-                            "modifier": modifier,
-                            "source": "story_event",
-                        }
-                    )
+
+                    normalized_status["name"] = status_name
+                    normalized_status["type"] = status_type
+                    normalized_status["source"] = "story_event"
+                    statuses.append(normalized_status)
                     existing_keys.add(key)
                     status_changed = True
 

@@ -254,13 +254,23 @@ result = await service.generate_narrative(
 
 #### 게임 플레이
 
-- `submit_player_action` - 행동 제출 (Phase 1)
+- `submit_action` - 행동 큐 제출
   ```json
   {
     "session_id": 1,
-    "character_id": 1,
+    "player_id": 1,
+    "character_name": "엘라라",
     "action_text": "문을 연다",
-    "action_type": "dexterity"
+    "action_mode": "normal",
+    "skill_name": null
+  }
+  ```
+
+- `commit_actions` - 방장이 큐를 확정하고 판정 라운드 시작
+  ```json
+  {
+    "session_id": 1,
+    "user_id": 1
   }
   ```
 
@@ -271,6 +281,14 @@ result = await service.generate_narrative(
     "character_id": 1,
     "judgment_id": 1,
     "dice_result": 15
+  }
+  ```
+
+- `request_narrative_stream` - 이야기를 진행/스트리밍
+  ```json
+  {
+    "session_id": 1,
+    "force": false
   }
   ```
 
@@ -305,15 +323,9 @@ result = await service.generate_narrative(
 
 #### Phase 3 이벤트
 
-- `story_generation_started` - 서술 생성 시작
-- `story_generation_complete` - 서술 생성 완료
-  ```json
-  {
-    "session_id": 1,
-    "narrative": "당신은 문을 조심스럽게 연다...",
-    "judgments": [...]
-  }
-  ```
+- `narrative_stream_started` - 서술 스트림 시작
+- `narrative_token` - 서술 토큰 청크
+- `narrative_complete` - 서술 스트림 완료
 
 ## 개발 가이드
 

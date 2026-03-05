@@ -46,6 +46,7 @@ class ModelResponse(BaseModel):
     is_active: bool
     is_active_story: bool
     is_active_judgment: bool
+    is_active_image: bool
     has_api_key: bool
     created_at: str
 
@@ -56,15 +57,18 @@ class LLMSettingsResponse(BaseModel):
     active_model: ModelResponse | None
     active_story_model: ModelResponse | None
     active_judgment_model: ModelResponse | None
+    active_image_model: ModelResponse | None
     active_source: str
     active_story_source: str
     active_judgment_source: str
+    active_image_source: str
     env_model: str | None
     env_story_model: str | None
     env_judgment_model: str | None
+    env_image_model: str | None
 
 
-VALID_PURPOSES = {"story", "judgment"}
+VALID_PURPOSES = {"story", "judgment", "image"}
 
 
 # --- Helpers ---
@@ -105,7 +109,7 @@ def _normalize_purpose(purpose: str) -> str:
 
 
 def _is_any_active(model: LLMModel) -> bool:
-    return bool(model.is_active_story or model.is_active_judgment)
+    return bool(model.is_active_story or model.is_active_judgment or model.is_active_image)
 
 
 PROVIDERS = [
@@ -155,6 +159,7 @@ def get_llm_settings(user_id: int, db: Session = Depends(get_db)):
     active_model = None
     active_story_model = None
     active_judgment_model = None
+    active_image_model = None
     for m in models:
         resp = ModelResponse(
             id=m.id,
@@ -164,6 +169,7 @@ def get_llm_settings(user_id: int, db: Session = Depends(get_db)):
             is_active=_is_any_active(m),
             is_active_story=bool(m.is_active_story),
             is_active_judgment=bool(m.is_active_judgment),
+            is_active_image=bool(m.is_active_image),
             has_api_key=m.provider in api_key_map,
             created_at=m.created_at.isoformat(),
         )
@@ -172,11 +178,14 @@ def get_llm_settings(user_id: int, db: Session = Depends(get_db)):
             active_story_model = resp
         if resp.is_active_judgment:
             active_judgment_model = resp
+        if resp.is_active_image:
+            active_image_model = resp
 
-    active_model = active_story_model or active_judgment_model
+    active_model = active_story_model or active_judgment_model or active_image_model
 
     active_story_in_db = active_story_model is not None
     active_judgment_in_db = active_judgment_model is not None
+    active_image_in_db = active_image_model is not None
 
     return LLMSettingsResponse(
         api_keys=api_keys_resp,
@@ -184,15 +193,18 @@ def get_llm_settings(user_id: int, db: Session = Depends(get_db)):
         active_model=active_model,
         active_story_model=active_story_model,
         active_judgment_model=active_judgment_model,
-        active_source="database" if active_story_in_db else "environment",
+        active_image_model=active_image_model,
+        active_source="database" if (active_story_in_db or active_judgment_in_db or active_image_in_db) else "environment",
         active_story_source="database" if active_story_in_db else "environment",
         active_judgment_source="database" if active_judgment_in_db else "environment",
+        active_image_source="database" if active_image_in_db else "environment",
         env_model=os.getenv("LLM_MODEL", "gpt-4o"),
         env_story_model=os.getenv("LLM_MODEL_STORY") or os.getenv("LLM_MODEL") or "gpt-4o",
         env_judgment_model=os.getenv("LLM_MODEL_JUDGMENT")
         or os.getenv("LLM_MODEL_FAST")
         or os.getenv("LLM_MODEL")
         or "gpt-4o-mini",
+        env_image_model=os.getenv("LLM_MODEL_IMAGE") or "gpt-image-1",
     )
 
 
@@ -232,7 +244,11 @@ def set_api_key(provider: str, body: ApiKeySetRequest, user_id: int, db: Session
         db.query(LLMModel)
         .filter(
             LLMModel.provider == provider,
-            ((LLMModel.is_active_story == True) | (LLMModel.is_active_judgment == True)),  # noqa: E712
+            (
+                (LLMModel.is_active_story == True)
+                | (LLMModel.is_active_judgment == True)
+                | (LLMModel.is_active_image == True)
+            ),  # noqa: E712
         )
         .first()
     )
@@ -261,7 +277,11 @@ def delete_api_key(provider: str, user_id: int, db: Session = Depends(get_db)):
         db.query(LLMModel)
         .filter(
             LLMModel.provider == provider,
-            ((LLMModel.is_active_story == True) | (LLMModel.is_active_judgment == True)),  # noqa: E712
+            (
+                (LLMModel.is_active_story == True)
+                | (LLMModel.is_active_judgment == True)
+                | (LLMModel.is_active_image == True)
+            ),  # noqa: E712
         )
         .first()
     )
@@ -311,6 +331,7 @@ def add_model(body: ModelCreateRequest, user_id: int, db: Session = Depends(get_
         is_active=_is_any_active(model),
         is_active_story=bool(model.is_active_story),
         is_active_judgment=bool(model.is_active_judgment),
+        is_active_image=bool(model.is_active_image),
         has_api_key=has_key,
         created_at=model.created_at.isoformat(),
     )
@@ -358,6 +379,9 @@ def activate_model(
     if normalized_purpose == "judgment":
         db.query(LLMModel).update({"is_active_judgment": False})
         model.is_active_judgment = True
+    elif normalized_purpose == "image":
+        db.query(LLMModel).update({"is_active_image": False})
+        model.is_active_image = True
     else:
         db.query(LLMModel).update({"is_active_story": False})
         model.is_active_story = True
@@ -380,6 +404,7 @@ def activate_model(
         is_active=_is_any_active(model),
         is_active_story=bool(model.is_active_story),
         is_active_judgment=bool(model.is_active_judgment),
+        is_active_image=bool(model.is_active_image),
         has_api_key=True,
         created_at=model.created_at.isoformat(),
     )
@@ -401,6 +426,8 @@ def deactivate_model(
 
     if normalized_purpose == "judgment":
         model.is_active_judgment = False
+    elif normalized_purpose == "image":
+        model.is_active_image = False
     else:
         model.is_active_story = False
     model.is_active = _is_any_active(model)
@@ -421,6 +448,7 @@ def deactivate_model(
         is_active=_is_any_active(model),
         is_active_story=bool(model.is_active_story),
         is_active_judgment=bool(model.is_active_judgment),
+        is_active_image=bool(model.is_active_image),
         has_api_key=has_key,
         created_at=model.created_at.isoformat(),
     )
@@ -443,6 +471,27 @@ def test_model_connection(model_id: int, user_id: int, db: Session = Depends(get
         import litellm
 
         plain_key = decrypt_api_key(api_key_row.api_key_encrypted)
+        is_image_model = "image" in model.model_id.lower()
+
+        if is_image_model:
+            response = litellm.image_generation(
+                model=model.model_id,
+                prompt="A simple fantasy landscape",
+                size="256x256",
+                n=1,
+                api_key=plain_key,
+            )
+            if isinstance(response, dict):
+                data = response.get("data", [])
+            elif hasattr(response, "model_dump"):
+                data = response.model_dump().get("data", [])
+            else:
+                data = []
+            has_data = isinstance(data, list) and len(data) > 0
+            return {
+                "success": has_data,
+                "message": f"Image connection {'successful' if has_data else 'failed'}. Model: {model.model_id}",
+            }
 
         response = litellm.completion(
             model=model.model_id,

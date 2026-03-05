@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Character, CharacterShareCode, User
+from app.services.character_generation_service import generate_character_from_concept
 from app.services.character_state import consume_inventory_item, normalize_inventory_items, normalize_statuses
 
 router = APIRouter(prefix="/api/characters", tags=["characters"])
@@ -202,6 +203,32 @@ class CharacterUpdate(BaseModel):
                 ],
             }
         }
+
+
+class CharacterAICreateRequest(BaseModel):
+    """Request model for AI-assisted character creation."""
+
+    user_id: int = Field(..., description="ID of the user creating the character")
+    concept_text: str = Field(..., min_length=1, description="캐릭터 컨셉 설명")
+
+
+class CharacterAIGeneratedDraftResponse(BaseModel):
+    """Response model for AI-generated character draft without persistence."""
+
+    name: str
+    age: int
+    race: str
+    concept: str
+    strength: int
+    dexterity: int
+    constitution: int
+    intelligence: int
+    wisdom: int
+    charisma: int
+    skills: list[dict[str, Any]] = Field(default_factory=list)
+    weaknesses: list[str] = Field(default_factory=list)
+    statuses: list[dict[str, Any] | str] = Field(default_factory=list)
+    inventory: list[dict[str, Any] | str] = Field(default_factory=list)
 
 
 class CharacterResponse(BaseModel):
@@ -415,6 +442,99 @@ def create_character(char_data: CharacterCreate, db: Session = Depends(get_db)):
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to create character: {e!s}")
+
+
+@router.post("/ai-create", response_model=CharacterResponse, status_code=201)
+async def create_character_with_ai(payload: CharacterAICreateRequest, db: Session = Depends(get_db)):
+    """Create a character from a free-form concept using AI generation."""
+    user = db.query(User).filter(User.id == payload.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User with id {payload.user_id} not found")
+
+    concept_text = payload.concept_text.strip()
+    if not concept_text:
+        raise HTTPException(status_code=400, detail="concept_text is required")
+
+    try:
+        generated = await generate_character_from_concept(concept_text)
+        character_data = _build_character_data(
+            age=int(generated.get("age", 25)),
+            race=str(generated.get("race", "인간")),
+            concept=str(generated.get("concept", concept_text)),
+            strength=int(generated.get("strength", 9)),
+            dexterity=int(generated.get("dexterity", 9)),
+            constitution=int(generated.get("constitution", 9)),
+            intelligence=int(generated.get("intelligence", 9)),
+            wisdom=int(generated.get("wisdom", 9)),
+            charisma=int(generated.get("charisma", 9)),
+            skills=generated.get("skills", []),
+            statuses=[],
+            weaknesses=[],
+            inventory=[],
+            status_effects=[],
+            sync_status_effects=False,
+        )
+        new_character = Character(
+            user_id=payload.user_id,
+            name=str(generated.get("name", "이름없는 모험가")).strip() or "이름없는 모험가",
+            data=character_data,
+            created_at=datetime.utcnow(),
+        )
+        db.add(new_character)
+        db.commit()
+        db.refresh(new_character)
+
+        return CharacterResponse(
+            id=new_character.id,
+            user_id=new_character.user_id,
+            name=new_character.name,
+            data=_normalize_character_data_for_response(new_character.data),
+            created_at=new_character.created_at.isoformat(),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to create character with AI: {e!s}") from e
+
+
+@router.post("/ai-generate", response_model=CharacterAIGeneratedDraftResponse)
+async def generate_character_with_ai(payload: CharacterAICreateRequest, db: Session = Depends(get_db)):
+    """Generate a character draft from concept text without saving it."""
+    user = db.query(User).filter(User.id == payload.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User with id {payload.user_id} not found")
+
+    concept_text = payload.concept_text.strip()
+    if not concept_text:
+        raise HTTPException(status_code=400, detail="concept_text is required")
+
+    try:
+        generated = await generate_character_from_concept(concept_text)
+        return CharacterAIGeneratedDraftResponse(
+            name=str(generated.get("name", "이름없는 모험가")).strip() or "이름없는 모험가",
+            age=int(generated.get("age", 25)),
+            race=str(generated.get("race", "인간")),
+            concept=str(generated.get("concept", concept_text)),
+            strength=int(generated.get("strength", 9)),
+            dexterity=int(generated.get("dexterity", 9)),
+            constitution=int(generated.get("constitution", 9)),
+            intelligence=int(generated.get("intelligence", 9)),
+            wisdom=int(generated.get("wisdom", 9)),
+            charisma=int(generated.get("charisma", 9)),
+            skills=generated.get("skills", []),
+            weaknesses=[],
+            statuses=[],
+            inventory=[],
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate character draft with AI: {e!s}") from e
 
 
 @router.put("/{character_id}", response_model=CharacterResponse)

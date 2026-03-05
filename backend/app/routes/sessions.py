@@ -20,6 +20,7 @@ from app.models import (
     StoryLog,
 )
 from app.services.session_activity_logger import log_session_activity
+from app.services.session_image_concept_service import generate_image_concept_from_world_prompt
 from app.socket_server import sio
 from app.utils.backups import backup_session
 from app.utils.timezone import to_kst_iso
@@ -376,6 +377,8 @@ class HostSessionItem(BaseModel):
     title: str
     world_prompt: str
     system_prompt: str
+    max_acts: int | None
+    act_min_narrative_turns: int | None
     is_active: bool
     created_at: str
     participant_count: int
@@ -386,6 +389,25 @@ class SessionUpdateRequest(BaseModel):
     title: str = Field(..., min_length=1, description="Updated session title")
     world_prompt: str | None = Field(default=None, description="Updated world prompt")
     system_prompt: str | None = Field(default=None, description="Alias for world_prompt")
+    max_acts: int | None = Field(default=None, description="Maximum act count (null for unlimited)")
+    act_min_narrative_turns: int | None = Field(
+        default=None,
+        description="Minimum AI narrative turns per act before transition (null for unlimited)",
+    )
+
+
+class SessionImageConceptResponse(BaseModel):
+    session_id: int
+    image_concept: str
+
+
+class SessionImageConceptUpdateRequest(BaseModel):
+    user_id: int
+    image_concept: str = Field(..., min_length=1)
+
+
+class SessionImageConceptRegenerateRequest(BaseModel):
+    user_id: int
 
 
 class SessionDuplicateResponse(BaseModel):
@@ -410,6 +432,8 @@ def list_host_sessions(host_user_id: int, db: Session = Depends(get_db)):
             title=s.title,
             world_prompt=s.world_prompt,
             system_prompt=s.world_prompt,
+            max_acts=s.max_acts,
+            act_min_narrative_turns=s.act_min_narrative_turns,
             is_active=s.is_active,
             created_at=to_kst_iso(s.created_at),
             participant_count=count,
@@ -417,6 +441,89 @@ def list_host_sessions(host_user_id: int, db: Session = Depends(get_db)):
         )
         for s, count in sessions_with_counts
     ]
+
+
+@router.get("/{session_id}/image-concept", response_model=SessionImageConceptResponse)
+def get_session_image_concept(
+    session_id: int,
+    user_id: int,
+    db: Session = Depends(get_db),
+):
+    session = db.query(GameSession).filter(GameSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.host_user_id != user_id:
+        raise HTTPException(status_code=403, detail="Only the host can access image concept")
+
+    return SessionImageConceptResponse(
+        session_id=session_id,
+        image_concept=(session.image_concept or "").strip(),
+    )
+
+
+@router.put("/{session_id}/image-concept", response_model=SessionImageConceptResponse)
+def update_session_image_concept(
+    session_id: int,
+    payload: SessionImageConceptUpdateRequest,
+    db: Session = Depends(get_db),
+):
+    session = db.query(GameSession).filter(GameSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.host_user_id != payload.user_id:
+        raise HTTPException(status_code=403, detail="Only the host can update image concept")
+
+    concept = payload.image_concept.strip()
+    if not concept:
+        raise HTTPException(status_code=400, detail="image_concept is required")
+
+    session.image_concept = concept
+    log_session_activity(
+        db,
+        session_id=session_id,
+        actor_user_id=payload.user_id,
+        source="api",
+        action_type="session.image_concept.update",
+        status="success",
+        message="세션 이미지 컨셉 수정",
+    )
+    db.commit()
+
+    return SessionImageConceptResponse(
+        session_id=session_id,
+        image_concept=session.image_concept,
+    )
+
+
+@router.post("/{session_id}/image-concept/regenerate", response_model=SessionImageConceptResponse)
+async def regenerate_session_image_concept(
+    session_id: int,
+    payload: SessionImageConceptRegenerateRequest,
+    db: Session = Depends(get_db),
+):
+    session = db.query(GameSession).filter(GameSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.host_user_id != payload.user_id:
+        raise HTTPException(status_code=403, detail="Only the host can regenerate image concept")
+
+    concept = await generate_image_concept_from_world_prompt(session.world_prompt or "")
+    session.image_concept = concept
+    log_session_activity(
+        db,
+        session_id=session_id,
+        actor_user_id=payload.user_id,
+        source="api",
+        action_type="session.image_concept.regenerate",
+        status="success",
+        message="세션 이미지 컨셉 재생성",
+    )
+    db.commit()
+
+    return SessionImageConceptResponse(
+        session_id=session_id,
+        image_concept=session.image_concept,
+    )
 
 
 @router.get("/{session_id}/activity-logs", response_model=list[SessionActivityLogItem])
@@ -573,9 +680,20 @@ def update_session(
         raise HTTPException(status_code=400, detail="Title is required and cannot be empty")
     if not world_prompt:
         raise HTTPException(status_code=400, detail="System prompt is required and cannot be empty")
+    next_max_acts = payload.max_acts if "max_acts" in payload.model_fields_set else session.max_acts
+    next_min_turns = (
+        payload.act_min_narrative_turns
+        if "act_min_narrative_turns" in payload.model_fields_set
+        else session.act_min_narrative_turns
+    )
+    _validate_story_pacing(max_acts=next_max_acts, act_min_narrative_turns=next_min_turns)
 
     session.title = title
     session.world_prompt = world_prompt
+    if "max_acts" in payload.model_fields_set:
+        session.max_acts = payload.max_acts
+    if "act_min_narrative_turns" in payload.model_fields_set:
+        session.act_min_narrative_turns = payload.act_min_narrative_turns
     log_session_activity(
         db,
         session_id=session_id,
@@ -584,7 +702,11 @@ def update_session(
         action_type="session.update",
         status="success",
         message="세션/프롬프트 수정",
-        detail={"title": title},
+        detail={
+            "title": title,
+            "max_acts": session.max_acts,
+            "act_min_narrative_turns": session.act_min_narrative_turns,
+        },
     )
     db.commit()
     return {"message": "Session updated"}
@@ -607,7 +729,10 @@ def duplicate_session(session_id: int, user_id: int, db: Session = Depends(get_d
             host_user_id=source.host_user_id,
             title=f"{source.title} (복제본)",
             world_prompt=source.world_prompt,
+            image_concept=source.image_concept or "",
             ai_summary=source.ai_summary,
+            max_acts=source.max_acts,
+            act_min_narrative_turns=source.act_min_narrative_turns,
             is_active=False,
             created_at=datetime.utcnow(),
         )

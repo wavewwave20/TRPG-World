@@ -303,3 +303,67 @@ def test_activity_logs_are_host_only(client, db_session):
 
     forbidden = client.get(f"/api/sessions/{session.id}/activity-logs?user_id={outsider.id}&limit=20")
     assert forbidden.status_code == 403
+
+
+def test_session_image_concept_get_and_update_host_only(client, db_session):
+    host = _create_user(db_session, "image_concept_host")
+    outsider = _create_user(db_session, "image_concept_outsider")
+    session = _create_session(db_session, host_user_id=host.id, is_active=True)
+
+    forbidden_get = client.get(f"/api/sessions/{session.id}/image-concept?user_id={outsider.id}")
+    assert forbidden_get.status_code == 403
+
+    forbidden_update = client.put(
+        f"/api/sessions/{session.id}/image-concept",
+        json={"user_id": outsider.id, "image_concept": "Noir fantasy concept"},
+    )
+    assert forbidden_update.status_code == 403
+
+    update_response = client.put(
+        f"/api/sessions/{session.id}/image-concept",
+        json={"user_id": host.id, "image_concept": "  Noir fantasy concept  "},
+    )
+    assert update_response.status_code == 200
+    assert update_response.json()["image_concept"] == "Noir fantasy concept"
+
+    get_response = client.get(f"/api/sessions/{session.id}/image-concept?user_id={host.id}")
+    assert get_response.status_code == 200
+    assert get_response.json()["image_concept"] == "Noir fantasy concept"
+
+
+def test_session_image_concept_update_rejects_blank_text(client, db_session):
+    host = _create_user(db_session, "image_concept_blank_host")
+    session = _create_session(db_session, host_user_id=host.id, is_active=True)
+
+    response = client.put(
+        f"/api/sessions/{session.id}/image-concept",
+        json={"user_id": host.id, "image_concept": "   "},
+    )
+
+    assert response.status_code == 400
+    assert "image_concept" in response.json()["detail"]
+
+
+def test_session_image_concept_regenerate(client, db_session, monkeypatch):
+    host = _create_user(db_session, "image_concept_regen_host")
+    session = _create_session(db_session, host_user_id=host.id, is_active=True)
+
+    async def fake_generate_image_concept(_world_prompt: str) -> str:
+        return "Mood: mysterious ruins. Art Style: painterly realism."
+
+    monkeypatch.setattr("app.routes.sessions.generate_image_concept_from_world_prompt", fake_generate_image_concept)
+
+    response = client.post(
+        f"/api/sessions/{session.id}/image-concept/regenerate",
+        json={"user_id": host.id},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["session_id"] == session.id
+    assert body["image_concept"] == "Mood: mysterious ruins. Art Style: painterly realism."
+
+    db_session.expire_all()
+    refreshed = db_session.query(GameSession).filter(GameSession.id == session.id).first()
+    assert refreshed is not None
+    assert refreshed.image_concept == "Mood: mysterious ruins. Art Style: painterly realism."

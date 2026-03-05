@@ -21,7 +21,7 @@ class LLMConfig:
         self.source = source  # "database" or "environment"
 
 
-VALID_MODEL_PURPOSES = {"story", "judgment"}
+VALID_MODEL_PURPOSES = {"story", "judgment", "image"}
 
 
 def _validate_purpose(purpose: str) -> str:
@@ -34,6 +34,8 @@ def _validate_purpose(purpose: str) -> str:
 def _resolve_env_model(purpose: str) -> str:
     if purpose == "judgment":
         return os.getenv("LLM_MODEL_JUDGMENT") or os.getenv("LLM_MODEL_FAST") or os.getenv("LLM_MODEL", "gpt-4o-mini")
+    if purpose == "image":
+        return os.getenv("LLM_MODEL_IMAGE") or "gpt-image-1"
     return os.getenv("LLM_MODEL_STORY") or os.getenv("LLM_MODEL", "gpt-4o")
 
 
@@ -42,6 +44,12 @@ def _find_active_model(db, purpose: str):
         return (
             db.query(LLMModel)
             .filter(LLMModel.is_active_judgment == True)  # noqa: E712
+            .first()
+        )
+    if purpose == "image":
+        return (
+            db.query(LLMModel)
+            .filter(LLMModel.is_active_image == True)  # noqa: E712
             .first()
         )
     return (
@@ -117,4 +125,5 @@ def get_active_llm_models() -> dict[str, str]:
     return {
         "story": get_active_llm_model("story"),
         "judgment": get_active_llm_model("judgment"),
+        "image": get_active_llm_model("image"),
     }

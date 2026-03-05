@@ -58,3 +58,43 @@ def test_normalize_inventory_items_and_equipped_modifier():
 
     assert inventory_modifier_for_action(items, "charisma") == 3
     assert inventory_modifier_for_action(items, "strength") == 1
+
+
+def test_normalize_statuses_keeps_description_and_applies_to():
+    statuses = normalize_statuses(
+        {
+            "statuses": [
+                {
+                    "name": "집중",
+                    "type": "buff",
+                    "modifier": 2,
+                    "description": "정신을 가다듬어 시야를 확보함",
+                    "applies_to": ["dexterity", "wisdom"],
+                }
+            ]
+        },
+        include_legacy_status_effects=False,
+    )
+
+    assert len(statuses) == 1
+    assert statuses[0]["name"] == "집중"
+    assert statuses[0]["description"] == "정신을 가다듬어 시야를 확보함"
+    assert statuses[0]["applies_to"] == ["dexterity", "wisdom"]
+
+
+def test_normalize_inventory_items_keeps_description():
+    items = normalize_inventory_items(
+        [
+            {
+                "name": "은빛 단검",
+                "type": "equipment",
+                "equipped": True,
+                "modifier": 1,
+                "description": "언데드에게 특히 잘 먹히는 축성 무기",
+            }
+        ]
+    )
+
+    assert len(items) == 1
+    assert items[0]["name"] == "은빛 단검"
+    assert items[0]["description"] == "언데드에게 특히 잘 먹히는 축성 무기"

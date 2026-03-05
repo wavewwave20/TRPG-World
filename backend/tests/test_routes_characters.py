@@ -259,6 +259,51 @@ class TestCreateCharacter:
         data = response.json()["data"]
         assert data["inventory"] == []
 
+    def test_create_character_stores_status_and_inventory_descriptions(self, client, sample_user):
+        payload = {
+            "user_id": sample_user.id,
+            "name": "설명 테스트 캐릭터",
+            "age": 27,
+            "race": "Human",
+            "concept": "상태/인벤토리 설명 저장 테스트",
+            "strength": 11,
+            "dexterity": 13,
+            "constitution": 12,
+            "intelligence": 14,
+            "wisdom": 10,
+            "charisma": 9,
+            "skills": [],
+            "weaknesses": [],
+            "statuses": [
+                {
+                    "name": "집중",
+                    "type": "buff",
+                    "modifier": 1,
+                    "description": "주변 소음을 차단하고 표적에 집중한 상태",
+                }
+            ],
+            "inventory": [
+                {
+                    "name": "치유 물약",
+                    "type": "consumable",
+                    "quantity": 2,
+                    "description": "사용 시 상처를 빠르게 회복한다",
+                }
+            ],
+        }
+
+        response = client.post("/api/characters/", json=payload)
+        assert response.status_code == 201
+
+        data = response.json()["data"]
+        status = next((s for s in data["statuses"] if s["name"] == "집중"), None)
+        assert status is not None
+        assert status["description"] == "주변 소음을 차단하고 표적에 집중한 상태"
+
+        item = next((i for i in data["inventory"] if isinstance(i, dict) and i["name"] == "치유 물약"), None)
+        assert item is not None
+        assert item["description"] == "사용 시 상처를 빠르게 회복한다"
+
     def test_create_character_stores_race_and_concept(self, client, valid_character_data):
         """Race and concept fields are persisted in character data."""
         response = client.post("/api/characters/", json=valid_character_data)
@@ -297,6 +342,136 @@ class TestCreateCharacter:
 
         assert response.status_code == 201
         assert response.json()["name"] == "Trimmed Name"
+
+    def test_create_character_with_ai_success(self, client, sample_user, monkeypatch):
+        async def fake_generate_character_from_concept(_concept_text: str):
+            return {
+                "name": "AI 생성 영웅",
+                "age": 29,
+                "race": "인간 여성 (도시 빈민가 출신의 날렵한 체형)",
+                "concept": "어둠 속 정보를 거래하며 살아남은 정보상.",
+                "strength": 7,
+                "dexterity": 11,
+                "constitution": 9,
+                "intelligence": 11,
+                "wisdom": 9,
+                "charisma": 7,
+                "skills": [
+                    {"type": "passive", "name": "위기 직감", "description": "위험 기류를 빠르게 감지한다."},
+                    {"type": "passive", "name": "문서 위조", "description": "필요한 신분을 즉석에서 꾸민다."},
+                    {"type": "passive", "name": "약점: 과한 의심", "description": "결정이 늦어져 불리해질 때가 있다."},
+                    {"type": "active", "name": "연막 전개", "description": "시야를 차단해 탈출 경로를 만든다."},
+                    {"type": "active", "name": "허위 신호", "description": "적의 판단을 엇나가게 만든다."},
+                ],
+                "weaknesses": [],
+                "statuses": [],
+                "inventory": [],
+            }
+
+        monkeypatch.setattr("app.routes.characters.generate_character_from_concept", fake_generate_character_from_concept)
+
+        response = client.post(
+            "/api/characters/ai-create",
+            json={"user_id": sample_user.id, "concept_text": "첩보 활동에 능한 캐릭터"},
+        )
+
+        assert response.status_code == 201
+        body = response.json()
+        assert body["name"] == "AI 생성 영웅"
+        assert body["data"]["race"].startswith("인간 여성")
+        assert body["data"]["statuses"] == []
+        assert body["data"]["inventory"] == []
+        skills = body["data"]["skills"]
+        assert len(skills) == 5
+        assert len([s for s in skills if s.get("type") == "passive"]) == 3
+        assert len([s for s in skills if s.get("type") == "active"]) == 2
+        assert any("약점" in str(s.get("name", "")) for s in skills if s.get("type") == "passive")
+
+    def test_create_character_with_ai_blank_concept_rejected(self, client, sample_user):
+        response = client.post(
+            "/api/characters/ai-create",
+            json={"user_id": sample_user.id, "concept_text": "   "},
+        )
+
+        assert response.status_code == 400
+        assert "concept_text" in response.json()["detail"]
+
+    def test_create_character_with_ai_requires_existing_user(self, client):
+        response = client.post(
+            "/api/characters/ai-create",
+            json={"user_id": 99999, "concept_text": "암살자 출신 추적자"},
+        )
+
+        assert response.status_code == 404
+
+    def test_generate_character_draft_with_ai_success(self, client, sample_user, monkeypatch):
+        async def fake_generate_character_from_concept(_concept_text: str):
+            return {
+                "name": "AI 생성 초안",
+                "age": 31,
+                "race": "인간 논바이너리 (정보 길드의 기록 담당)",
+                "concept": "도시 기록 보관소에서 단서를 추적하는 조사관.",
+                "strength": 7,
+                "dexterity": 9,
+                "constitution": 9,
+                "intelligence": 11,
+                "wisdom": 11,
+                "charisma": 7,
+                "skills": [
+                    {"type": "passive", "name": "현장 추론", "description": "단서를 연결해 진실을 드러낸다."},
+                    {"type": "passive", "name": "서고 기억", "description": "기록을 빠르게 찾아낸다."},
+                    {"type": "passive", "name": "약점: 과몰입", "description": "핵심 단서에 집착해 주변을 놓친다."},
+                    {"type": "active", "name": "증거 제시", "description": "논리를 정리해 상대를 압박한다."},
+                    {"type": "active", "name": "긴급 대조", "description": "짧은 시간에 문서를 교차 검증한다."},
+                ],
+                "weaknesses": [],
+                "statuses": [],
+                "inventory": [],
+            }
+
+        monkeypatch.setattr("app.routes.characters.generate_character_from_concept", fake_generate_character_from_concept)
+
+        before_response = client.get(f"/api/characters/user/{sample_user.id}")
+        assert before_response.status_code == 200
+        assert before_response.json() == []
+
+        response = client.post(
+            "/api/characters/ai-generate",
+            json={"user_id": sample_user.id, "concept_text": "기록 분석에 강한 조사관"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["name"] == "AI 생성 초안"
+        assert body["race"].startswith("인간 논바이너리")
+        assert body["statuses"] == []
+        assert body["inventory"] == []
+        skills = body["skills"]
+        assert len(skills) == 5
+        assert len([s for s in skills if s.get("type") == "passive"]) == 3
+        assert len([s for s in skills if s.get("type") == "active"]) == 2
+        assert any("약점" in str(s.get("name", "")) for s in skills if s.get("type") == "passive")
+
+        after_response = client.get(f"/api/characters/user/{sample_user.id}")
+        assert after_response.status_code == 200
+        assert after_response.json() == []
+
+    def test_generate_character_draft_with_ai_blank_concept_rejected(self, client, sample_user):
+        response = client.post(
+            "/api/characters/ai-generate",
+            json={"user_id": sample_user.id, "concept_text": "   "},
+        )
+
+        assert response.status_code == 400
+        assert "concept_text" in response.json()["detail"]
+
+    def test_generate_character_draft_with_ai_requires_existing_user(self, client):
+        response = client.post(
+            "/api/characters/ai-generate",
+            json={"user_id": 99999, "concept_text": "사서 출신 탐정"},
+        )
+
+        assert response.status_code == 404
 
 
 class TestCreateCharacterValidation:
@@ -673,6 +848,51 @@ class TestUpdateCharacter:
         data = response.json()["data"]
         assert data["inventory"] == ["Sword", "Shield"]
 
+    def test_update_character_stores_status_and_inventory_descriptions(self, client, db_session, sample_user):
+        char = _create_character_via_db(db_session, sample_user)
+        update = {
+            "name": "설명 반영됨",
+            "age": 26,
+            "race": "Human",
+            "concept": "설명 저장 검증",
+            "strength": 12,
+            "dexterity": 13,
+            "constitution": 11,
+            "intelligence": 14,
+            "wisdom": 12,
+            "charisma": 9,
+            "skills": [],
+            "weaknesses": [],
+            "statuses": [
+                {
+                    "name": "행운",
+                    "type": "buff",
+                    "modifier": 2,
+                    "description": "좋은 징조가 겹쳐 판정에 유리함",
+                }
+            ],
+            "inventory": [
+                {
+                    "name": "독 해독제",
+                    "type": "consumable",
+                    "quantity": 1,
+                    "description": "독 상태를 해제하는 응급 약품",
+                }
+            ],
+        }
+
+        response = client.put(f"/api/characters/{char.id}", json=update)
+        assert response.status_code == 200
+
+        data = response.json()["data"]
+        status = next((s for s in data["statuses"] if s["name"] == "행운"), None)
+        assert status is not None
+        assert status["description"] == "좋은 징조가 겹쳐 판정에 유리함"
+
+        item = next((i for i in data["inventory"] if isinstance(i, dict) and i["name"] == "독 해독제"), None)
+        assert item is not None
+        assert item["description"] == "독 상태를 해제하는 응급 약품"
+
     def test_update_replaces_skills(self, client, db_session, sample_user, valid_update_data):
         """Skills list is fully replaced on update."""
         original_data = {
@@ -837,6 +1057,79 @@ class TestUpdateCharacterValidation:
         response = client.put(f"/api/characters/{char.id}", json={})
 
         assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# INVENTORY CONSUME (POST /api/characters/{character_id}/inventory/consume)
+# ---------------------------------------------------------------------------
+
+
+class TestConsumeInventoryItem:
+    def test_consume_inventory_decrements_quantity_and_keeps_description(self, client, db_session, sample_user):
+        data = {
+            "age": 25,
+            "race": "Human",
+            "concept": "",
+            "strength": 10,
+            "dexterity": 10,
+            "constitution": 10,
+            "intelligence": 10,
+            "wisdom": 10,
+            "charisma": 10,
+            "skills": [],
+            "weaknesses": [],
+            "statuses": [],
+            "status_effects": [],
+            "inventory": [
+                {
+                    "name": "치유 물약",
+                    "type": "consumable",
+                    "quantity": 2,
+                    "description": "즉시 체력을 회복하는 물약",
+                }
+            ],
+        }
+        char = _create_character_via_db(db_session, sample_user, name="Potion Tester", data=data)
+
+        response = client.post(
+            f"/api/characters/{char.id}/inventory/consume",
+            json={"item_name": "치유 물약"},
+        )
+
+        assert response.status_code == 200
+        inventory = response.json()["data"]["inventory"]
+        assert len(inventory) == 1
+        assert inventory[0]["name"] == "치유 물약"
+        assert inventory[0]["quantity"] == 1
+        assert inventory[0]["description"] == "즉시 체력을 회복하는 물약"
+
+    def test_consume_inventory_rejects_non_consumable_item(self, client, db_session, sample_user):
+        data = {
+            "age": 25,
+            "race": "Human",
+            "concept": "",
+            "strength": 10,
+            "dexterity": 10,
+            "constitution": 10,
+            "intelligence": 10,
+            "wisdom": 10,
+            "charisma": 10,
+            "skills": [],
+            "weaknesses": [],
+            "statuses": [],
+            "status_effects": [],
+            "inventory": [
+                {"name": "강철 검", "type": "equipment", "equipped": True, "modifier": 1},
+            ],
+        }
+        char = _create_character_via_db(db_session, sample_user, name="Sword Tester", data=data)
+
+        response = client.post(
+            f"/api/characters/{char.id}/inventory/consume",
+            json={"item_name": "강철 검"},
+        )
+
+        assert response.status_code == 400
 
 
 # ---------------------------------------------------------------------------

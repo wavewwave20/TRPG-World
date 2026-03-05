@@ -48,6 +48,7 @@ class GameSession(Base):
     host_user_id = Column(Integer, nullable=False)
     title = Column(String(255), nullable=False)
     world_prompt = Column(Text, nullable=False)
+    image_concept = Column(Text, nullable=False, default="", server_default="")
     ai_summary = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
@@ -372,9 +373,10 @@ class LLMModel(Base):
         provider: 프로바이더 식별자 (llm_api_keys.provider 참조)
         model_id: LiteLLM 형식 모델 식별자 (예: "gpt-4o", "gemini/gemini-2.5-flash")
         display_name: 사용자 표시명
-        is_active: 레거시 활성 플래그(스토리/판정 중 하나라도 활성)
+        is_active: 레거시 활성 플래그(스토리/판정/이미지 중 하나라도 활성)
         is_active_story: 메인 스토리 생성용 활성 모델 여부
         is_active_judgment: 판정/보조 추론용 활성 모델 여부
+        is_active_image: 이미지 생성용 활성 모델 여부
         created_at: 생성 시각
     """
 
@@ -387,4 +389,5 @@ class LLMModel(Base):
     is_active = Column(Boolean, default=False, nullable=False)
     is_active_story = Column(Boolean, default=False, nullable=False, server_default="false")
     is_active_judgment = Column(Boolean, default=False, nullable=False, server_default="false")
+    is_active_image = Column(Boolean, default=False, nullable=False, server_default="false")
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
