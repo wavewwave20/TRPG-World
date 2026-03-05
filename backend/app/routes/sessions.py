@@ -34,6 +34,11 @@ class SessionCreate(BaseModel):
     title: str = Field(..., min_length=1, description="Session title")
     world_prompt: str | None = Field(default=None, description="AI system prompt for the game world")
     system_prompt: str | None = Field(default=None, description="Alias for world_prompt")
+    max_acts: int | None = Field(default=4, description="Maximum act count (null for unlimited)")
+    act_min_narrative_turns: int | None = Field(
+        default=5,
+        description="Minimum AI narrative turns per act before transition (null for legacy behavior)",
+    )
 
     class Config:
         json_schema_extra = {
@@ -41,6 +46,8 @@ class SessionCreate(BaseModel):
                 "host_user_id": 1,
                 "title": "던전 탐험",
                 "system_prompt": "중세 판타지 세계관에서 플레이어들은 고대 던전을 탐험합니다...",
+                "max_acts": 4,
+                "act_min_narrative_turns": 5,
             }
         }
 
@@ -96,6 +103,17 @@ def _assert_host_access(session: GameSession | None, user_id: int) -> GameSessio
     if session.host_user_id != user_id:
         raise HTTPException(status_code=403, detail="Only the host can access session activity")
     return session
+
+
+def _validate_story_pacing(
+    *,
+    max_acts: int | None,
+    act_min_narrative_turns: int | None,
+) -> None:
+    if max_acts is not None and max_acts < 2:
+        raise HTTPException(status_code=400, detail="max_acts must be >= 2 or null")
+    if act_min_narrative_turns is not None and act_min_narrative_turns < 3:
+        raise HTTPException(status_code=400, detail="act_min_narrative_turns must be >= 3 or null")
 
 
 @router.get("/", response_model=list[SessionListItem])
@@ -161,6 +179,10 @@ async def create_session(session_data: SessionCreate, db: Session = Depends(get_
     prompt_value = session_data.system_prompt if session_data.system_prompt is not None else session_data.world_prompt
     if not prompt_value or not prompt_value.strip():
         raise HTTPException(status_code=400, detail="System prompt is required and cannot be empty")
+    _validate_story_pacing(
+        max_acts=session_data.max_acts,
+        act_min_narrative_turns=session_data.act_min_narrative_turns,
+    )
 
     try:
         # Create new session (Requirement 4.2)
@@ -168,6 +190,8 @@ async def create_session(session_data: SessionCreate, db: Session = Depends(get_
             host_user_id=session_data.host_user_id,
             title=session_data.title.strip(),
             world_prompt=prompt_value.strip(),
+            max_acts=session_data.max_acts,
+            act_min_narrative_turns=session_data.act_min_narrative_turns,
         )
 
         # Insert into database
@@ -183,6 +207,8 @@ async def create_session(session_data: SessionCreate, db: Session = Depends(get_
             message="세션 생성",
             detail={
                 "title": new_session.title,
+                "max_acts": new_session.max_acts,
+                "act_min_narrative_turns": new_session.act_min_narrative_turns,
             },
             dedupe_key=f"session-create:{new_session.id}",
         )

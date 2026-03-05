@@ -109,6 +109,88 @@ def _create_session(db_session, host_user_id: int, is_active: bool = True) -> Ga
     return session
 
 
+def test_create_session_applies_story_pacing_defaults(client, db_session):
+    host = _create_user(db_session, "session_create_default_host")
+
+    response = client.post(
+        "/api/sessions/",
+        json={
+            "host_user_id": host.id,
+            "title": "Default Story Session",
+            "world_prompt": "Default world prompt",
+        },
+    )
+
+    assert response.status_code == 201
+    session_id = response.json()["session_id"]
+
+    created = db_session.query(GameSession).filter(GameSession.id == session_id).first()
+    assert created is not None
+    assert created.max_acts == 4
+    assert created.act_min_narrative_turns == 5
+
+
+def test_create_session_supports_unlimited_story_pacing(client, db_session):
+    host = _create_user(db_session, "session_create_unlimited_host")
+
+    response = client.post(
+        "/api/sessions/",
+        json={
+            "host_user_id": host.id,
+            "title": "Unlimited Story Session",
+            "world_prompt": "Unlimited world prompt",
+            "max_acts": None,
+            "act_min_narrative_turns": None,
+        },
+    )
+
+    assert response.status_code == 201
+    session_id = response.json()["session_id"]
+
+    created = db_session.query(GameSession).filter(GameSession.id == session_id).first()
+    assert created is not None
+    assert created.max_acts is None
+    assert created.act_min_narrative_turns is None
+
+
+@pytest.mark.parametrize(
+    "payload,expected_detail",
+    [
+        (
+            {
+                "title": "Invalid Max Acts",
+                "world_prompt": "prompt",
+                "max_acts": 1,
+                "act_min_narrative_turns": 5,
+            },
+            "max_acts must be >= 2 or null",
+        ),
+        (
+            {
+                "title": "Invalid Min Turns",
+                "world_prompt": "prompt",
+                "max_acts": 4,
+                "act_min_narrative_turns": 2,
+            },
+            "act_min_narrative_turns must be >= 3 or null",
+        ),
+    ],
+)
+def test_create_session_rejects_invalid_story_pacing_values(client, db_session, payload, expected_detail):
+    host = _create_user(db_session, f"session_create_invalid_host_{payload['title'].replace(' ', '_').lower()}")
+
+    response = client.post(
+        "/api/sessions/",
+        json={
+            "host_user_id": host.id,
+            **payload,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == expected_detail
+
+
 def test_join_session_creates_participant(client, db_session):
     user = _create_user(db_session, "session_join_user")
     character = _create_character(db_session, user, "First Hero")

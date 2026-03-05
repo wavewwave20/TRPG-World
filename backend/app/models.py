@@ -38,6 +38,8 @@ class GameSession(Base):
         ai_summary: 장기 기억용 AI 생성 요약 (선택사항)
         created_at: 세션 생성 시각
         is_active: 활성 상태 플래그 (호스트 연결 해제 시 비활성화되지만 삭제되지 않음)
+        max_acts: 스토리의 최대 막 수 (NULL이면 무제한)
+        act_min_narrative_turns: 막 전환 가능 최소 AI 서술 턴 수 (NULL이면 기존 로직)
     """
 
     __tablename__ = "game_sessions"
@@ -49,6 +51,8 @@ class GameSession(Base):
     ai_summary = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
+    max_acts = Column(Integer, nullable=True)
+    act_min_narrative_turns = Column(Integer, nullable=True)
     event_probability = Column(Float, default=0.00, nullable=False, server_default="0.00")
     host_instruction = Column(Text, nullable=False, default="", server_default="")
     host_story_controls = Column(JSON, nullable=False, default=dict, server_default="{}")

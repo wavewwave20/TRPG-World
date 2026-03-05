@@ -24,6 +24,7 @@ from app.models import (
     Character,
     CharacterGrowthLog,
     GameSession,
+    SessionParticipant,
     StoryAct,
     StoryFlowMetric,
     StoryLog,
@@ -238,13 +239,10 @@ class AIGMServiceV2:
             logger.debug(f"판정 계산 완료: {len(judgments)}개")
 
             # AI 노드 호출하여 서술 생성
-            # 막 컨텍스트 구성
-            act_context = None
-            if game_context.current_act:
-                act = game_context.current_act
-                act_context = f"{act.act_number}막 — {act.title}"
-                if act.subtitle:
-                    act_context += f": {act.subtitle}"
+            act_context = self._build_act_context_for_narrative(
+                session_id=session_id,
+                act=game_context.current_act,
+            )
 
             self._sync_host_instruction_from_session(
                 session_id=session_id,
@@ -344,6 +342,108 @@ class AIGMServiceV2:
             ai_summary=ai_summary,
             controls=controls,
         )
+
+    def _count_ai_narrative_turns(self, *, session_id: int, act_id: int) -> int:
+        """현재 막의 AI 서술 턴 수를 반환합니다."""
+        return (
+            self.db.query(StoryLog)
+            .filter(
+                StoryLog.session_id == session_id,
+                StoryLog.act_id == act_id,
+                StoryLog.role == "AI",
+            )
+            .count()
+        )
+
+    def _build_act_context_for_narrative(self, *, session_id: int, act: StoryActInfo | None) -> str | None:
+        """내러티브 생성에 사용할 Act 진행 컨텍스트를 구성합니다."""
+        if not act:
+            return None
+
+        context = f"{act.act_number}막 — {act.title}"
+        if act.subtitle:
+            context += f": {act.subtitle}"
+
+        session = self.db.query(GameSession).filter(GameSession.id == session_id).first()
+        if not session:
+            return context
+
+        current_turns = self._count_ai_narrative_turns(session_id=session_id, act_id=act.id)
+        next_turn = current_turns + 1
+        lines = [f"- 현재 막 AI 서술 턴: {current_turns} (이번 생성은 {next_turn}턴째)"]
+
+        min_turns = session.act_min_narrative_turns
+        max_acts = session.max_acts
+
+        if min_turns is None:
+            lines.append("- 막 최소 분량: 무제한(기존 로직 기준으로 전환 판단).")
+        else:
+            remaining_to_min = max(min_turns - current_turns, 0)
+            if remaining_to_min > 0:
+                lines.append(f"- 현재 막 최소 분량까지 남은 턴: {remaining_to_min}")
+                lines.append("- 최소 턴 달성 전에는 절대 급마무리하지 말고 act_transition=false 유지.")
+            else:
+                turns_after_min = current_turns - min_turns
+                if turns_after_min <= 1:
+                    lines.append("- 최소 턴 도달. 앞으로 1~2턴 안에 자연스럽게 막을 정리할 수 있음.")
+                else:
+                    lines.append("- 최소 턴 이후 구간. 지나친 지연 없이 자연스럽게 전환을 준비.")
+
+        if max_acts is None:
+            lines.append("- 총 Act 상한: 무제한(엔딩 없음 모드).")
+        else:
+            remaining_acts = max(max_acts - act.act_number, 0)
+            lines.append(f"- 총 Act 상한: {max_acts}, 현재 Act: {act.act_number}, 남은 Act: {remaining_acts}")
+            if act.act_number >= max_acts:
+                lines.append("- 현재는 마지막 Act. 반드시 이 막에서 결말을 완성하고 갈등을 해소.")
+            elif max_acts == 4:
+                stage_map = {1: "기(도입)", 2: "승(전개)", 3: "전(전환/위기)", 4: "결(해소/결말)"}
+                current_stage = stage_map.get(act.act_number, "전개")
+                next_stage = stage_map.get(act.act_number + 1, "다음 단계")
+                lines.append(f"- 4막 구조 기준 현재 단계: {current_stage}, 다음 단계 목표: {next_stage}")
+
+        return context + "\n\n## Act 진행 규칙(시스템 고정)\n" + "\n".join(lines)
+
+    def _complete_story_on_current_act(self, *, session_id: int, current_act_db: StoryAct, reason: str) -> None:
+        """최종 막을 종료하고 세션을 스토리 완료 상태로 전환합니다."""
+        session = self.db.query(GameSession).filter(GameSession.id == session_id).first()
+        if not session:
+            return
+
+        current_act_db.ended_at = datetime.utcnow()
+        last_log = (
+            self.db.query(StoryLog)
+            .filter(StoryLog.session_id == session_id, StoryLog.act_id == current_act_db.id)
+            .order_by(StoryLog.created_at.desc(), StoryLog.id.desc())
+            .first()
+        )
+        if last_log:
+            current_act_db.end_story_log_id = last_log.id
+
+        session.is_active = False
+        removed_participants = (
+            self.db.query(SessionParticipant)
+            .filter(SessionParticipant.session_id == session_id)
+            .delete()
+        )
+
+        log_session_activity(
+            self.db,
+            session_id=session_id,
+            source="system",
+            action_type="story.completed",
+            status="success",
+            message="최종 Act에서 스토리 완료",
+            detail={
+                "reason": reason,
+                "completed_act_id": current_act_db.id,
+                "completed_act_number": current_act_db.act_number,
+                "max_acts": session.max_acts,
+                "participant_removed_count": removed_participants,
+            },
+            dedupe_key=f"story-completed:{session_id}:{current_act_db.id}",
+        )
+        self.db.commit()
 
     def _log_story_flow_metric(
         self,
@@ -450,12 +550,10 @@ class AIGMServiceV2:
             system_prompt="",
         )
 
-        act_context = None
-        if game_context.current_act:
-            act = game_context.current_act
-            act_context = f"{act.act_number}막 — {act.title}"
-            if act.subtitle:
-                act_context += f": {act.subtitle}"
+        act_context = self._build_act_context_for_narrative(
+            session_id=session_id,
+            act=game_context.current_act,
+        )
 
         director_service = get_story_director_service()
         director_guidance = director_service.build_guidance(
@@ -752,12 +850,10 @@ class AIGMServiceV2:
             buffer.event_triggered = event_triggered
 
             # 막 컨텍스트 구성
-            act_context = None
-            if game_context.current_act:
-                act = game_context.current_act
-                act_context = f"{act.act_number}막 — {act.title}"
-                if act.subtitle:
-                    act_context += f": {act.subtitle}"
+            act_context = self._build_act_context_for_narrative(
+                session_id=session_id,
+                act=game_context.current_act,
+            )
 
             self._sync_host_instruction_from_session(
                 session_id=session_id,
@@ -1367,6 +1463,22 @@ class AIGMServiceV2:
             logger.debug(f"세션 {session_id}: 현재 막 없음, 전환 스킵")
             return None
 
+        session = self.db.query(GameSession).filter(GameSession.id == session_id).first()
+        if not session:
+            logger.warning(f"세션 {session_id}: 세션 정보를 찾을 수 없어 막 전환을 스킵합니다")
+            return None
+
+        current_ai_turns = self._count_ai_narrative_turns(session_id=session_id, act_id=current_act_db.id)
+        min_turns = session.act_min_narrative_turns
+        if min_turns is not None and current_ai_turns < min_turns:
+            logger.info(
+                f"세션 {session_id}: 최소 턴 미달 ({current_ai_turns}/{min_turns})로 막 전환 분석 스킵"
+            )
+            return None
+        if min_turns is None and current_ai_turns <= 2:
+            logger.info(f"세션 {session_id}: 기존 가드 적용 ({current_ai_turns}턴)으로 막 전환 분석 스킵")
+            return None
+
         current_act_info = StoryActInfo(
             id=current_act_db.id,
             act_number=current_act_db.act_number,
@@ -1396,6 +1508,15 @@ class AIGMServiceV2:
             )
             return None
 
+        if session.max_acts is not None and current_act_db.act_number >= session.max_acts:
+            logger.info(f"세션 {session_id}: 마지막 Act({session.max_acts})에서 결말 처리 후 세션 종료")
+            self._complete_story_on_current_act(
+                session_id=session_id,
+                current_act_db=current_act_db,
+                reason="max_acts_reached",
+            )
+            return None
+
         logger.info(f"세션 {session_id}: 막 전환 결정! '{current_act_info.title}' → '{analysis.new_act_title}'")
 
         growth_rewards = self._load_growth_rewards_for_act(session_id=session_id, act_id=current_act_db.id)
@@ -1419,7 +1540,6 @@ class AIGMServiceV2:
             self._persist_growth_rewards(session_id, current_act_db.id, growth_rewards)
 
         # Act 종료 시점에만 ai_summary 갱신
-        session = self.db.query(GameSession).filter(GameSession.id == session_id).first()
         if session:
             try:
                 session.ai_summary = await generate_updated_ai_summary(
@@ -1519,10 +1639,20 @@ class AIGMServiceV2:
         # 현재 막의 스토리 로드
         act_story = load_act_story_history(self.db, session_id, current_act_db.id)
 
-        # 코드 가드: AI 서술 엔트리 2개 이하면 전환 거부
+        session = self.db.query(GameSession).filter(GameSession.id == session_id).first()
+        if not session:
+            logger.warning(f"세션 {session_id}: 세션 정보를 찾을 수 없어 전환을 스킵합니다")
+            return None
+
+        # 코드 가드: 최소 분량 미달 시 전환 거부 (NULL이면 기존 가드 적용)
         ai_entries = [e for e in act_story if e.role == "AI"]
-        if len(ai_entries) <= 2:
-            logger.warning(f"세션 {session_id}: AI 서술 {len(ai_entries)}개, 전환 거부 (최소 3개 필요)")
+        min_turns = session.act_min_narrative_turns
+        if min_turns is None:
+            if len(ai_entries) <= 2:
+                logger.warning(f"세션 {session_id}: AI 서술 {len(ai_entries)}개, 전환 거부 (최소 3개 필요)")
+                return None
+        elif len(ai_entries) < min_turns:
+            logger.info(f"세션 {session_id}: 최소 턴 미달 ({len(ai_entries)}/{min_turns})로 전환 거부")
             return None
 
         current_act_info = StoryActInfo(
@@ -1532,6 +1662,15 @@ class AIGMServiceV2:
             subtitle=current_act_db.subtitle,
             started_at=current_act_db.started_at.isoformat(),
         )
+
+        if session.max_acts is not None and current_act_db.act_number >= session.max_acts:
+            logger.info(f"세션 {session_id}: 마지막 Act({session.max_acts}) 전환 요청 -> 스토리 완료 처리")
+            self._complete_story_on_current_act(
+                session_id=session_id,
+                current_act_db=current_act_db,
+                reason="metadata_final_act_completion",
+            )
+            return None
 
         logger.info(f"세션 {session_id}: 메타데이터 기반 막 전환! '{current_act_info.title}' → '{new_act_title}'")
 
@@ -1559,7 +1698,6 @@ class AIGMServiceV2:
             self._persist_growth_rewards(session_id, current_act_db.id, growth_rewards)
 
         # ai_summary 갱신
-        session = self.db.query(GameSession).filter(GameSession.id == session_id).first()
         if session:
             try:
                 session.ai_summary = await generate_updated_ai_summary(

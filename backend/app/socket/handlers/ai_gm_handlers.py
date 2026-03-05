@@ -230,6 +230,24 @@ async def _check_act_transition_after_narrative(session_id, db, room_name, sio):
         result = await ai_service.check_act_transition(session_id)
 
         if result is None:
+            refreshed = db.query(GameSession).filter(GameSession.id == session_id).first()
+            if refreshed and not refreshed.is_active:
+                await sio.emit(
+                    "story_completed",
+                    {"session_id": session_id, "reason": "max_acts_reached"},
+                    room=room_name,
+                )
+                await sio.emit(
+                    "session_ended",
+                    {"session_id": session_id, "reason": "story_completed"},
+                    room=room_name,
+                )
+                await sio.close_room(room_name)
+                await sio.emit(
+                    "session_catalog_updated",
+                    {"reason": "story_completed", "session_id": session_id},
+                )
+                return
             await sio.emit(
                 "act_transition_cancelled",
                 {"session_id": session_id},
@@ -357,6 +375,24 @@ async def _handle_act_transition_from_metadata(session_id, metadata, db, room_na
         )
 
         if result is None:
+            refreshed = db.query(GameSession).filter(GameSession.id == session_id).first()
+            if refreshed and not refreshed.is_active:
+                await sio.emit(
+                    "story_completed",
+                    {"session_id": session_id, "reason": "max_acts_reached"},
+                    room=room_name,
+                )
+                await sio.emit(
+                    "session_ended",
+                    {"session_id": session_id, "reason": "story_completed"},
+                    room=room_name,
+                )
+                await sio.close_room(room_name)
+                await sio.emit(
+                    "session_catalog_updated",
+                    {"reason": "story_completed", "session_id": session_id},
+                )
+                return
             logger.info(f"세션 {session_id}: 막 전환 거부됨 (코드 가드)")
             await sio.emit(
                 "act_transition_cancelled",
