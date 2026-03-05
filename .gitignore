@@ -89,6 +89,9 @@ alembic/versions/__pycache__/
 # Serena
 .serena/
 
+# OpenClaw local workspace metadata
+.openclaw/
+
 # Hypothesis (pytest)
 .hypothesis/
 
